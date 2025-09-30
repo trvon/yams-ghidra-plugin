@@ -1,0 +1,13 @@
+{
+  "name": "yams-ghidra-plugin",
+  "version": "0.1.0",
+  "transport": "external",
+  "interfaces": ["ghidra_analysis_v1"],
+  "entry": {
+    "cmd": ["python", "plugins/yams-ghidra-plugin/plugin.py"],
+    "env": {},
+    "requires": [],
+    "notes": "Example manifest for Ghidra external plugin"
+  }
+}
+

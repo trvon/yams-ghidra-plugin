@@ -1,5 +1,11 @@
 # YAMS Ghidra External Plugin (Experimental)
 
+## Status
+
+[![Ghidra Plugin CI](https://github.com/trvon/yams-ghidra-plugin/actions/workflows/ghidra-plugin-ci.yml/badge.svg)](https://github.com/trvon/yams-ghidra-plugin/actions/workflows/ghidra-plugin-ci.yml)
+
+Remote: git@github.com:trvon/yams-ghidra-plugin.git (from .gitmodules)
+
 This example provides an External (Python) plugin for YAMS that uses PyGhidra to analyze binaries.
 It speaks newline‑delimited JSON‑RPC over stdio using the SDK in `external/yams-sdk`.
 
