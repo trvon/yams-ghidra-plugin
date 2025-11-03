@@ -23,7 +23,22 @@ class GhidraPlugin(BasePlugin):
                 self.register(rpc_name, fn)
 
     def manifest(self) -> dict:
-        return {"name": "yams_ghidra", "version": "0.0.1", "interfaces": ["ghidra_analysis_v1"]}
+        return {
+            "name": "yams_ghidra",
+            "version": "0.0.1",
+            "interfaces": ["content_extractor_v1", "ghidra_analysis_v1"],
+            "capabilities": {
+                "content_extraction": {
+                    "formats": [
+                        "application/x-executable",
+                        "application/x-sharedlib",
+                        "application/x-mach-binary",
+                        "application/x-object"
+                    ],
+                    "extensions": [".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a"]
+                }
+            }
+        }
 
     def init(self, config: Dict[str, Any]) -> None:  # noqa: A003
         # Lazy-import pyghidra on init to avoid hard dependency for non-users
@@ -53,6 +68,146 @@ class GhidraPlugin(BasePlugin):
 
     def health(self) -> dict:
         return {"status": "ok", "started": self._started, "project_dir": self._project_dir}
+
+    @rpc("extractor.supports")
+    def extractor_supports(self, mime_type: str, extension: str) -> dict:
+        """Check if this extractor supports the given MIME type or extension.
+        
+        Returns: {"supported": bool}
+        """
+        binary_mimes = {
+            "application/x-executable",
+            "application/x-sharedlib",
+            "application/x-mach-binary",
+            "application/x-object",
+            "application/octet-stream",  # Generic binary
+        }
+        binary_exts = {
+            ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
+            ".bin", ".out"  # Common binary extensions
+        }
+        
+        supported = (
+            mime_type in binary_mimes or
+            extension.lower() in binary_exts
+        )
+        return {"supported": supported}
+
+    @rpc("extractor.extract")
+    def extractor_extract(
+        self,
+        source: Dict[str, Any],
+        options: Optional[Dict[str, Any]] = None
+    ) -> dict:
+        """Extract searchable text from binary via Ghidra decompilation.
+        
+        Args:
+            source: Source descriptor (type: "path" or "bytes", data/path)
+            options: Optional extraction options:
+                - max_functions: Max functions to decompile (default: 100)
+                - timeout_sec: Decompile timeout per function (default: 30)
+        
+        Returns:
+            {
+                "text": str,        # Searchable decompiled code
+                "metadata": dict,   # Extraction metadata
+                "error": str|None   # Error message if failed
+            }
+        """
+        opts = options or {}
+        max_functions = int(opts.get("max_functions", 100))
+        timeout_sec = int(opts.get("timeout_sec", 30))
+        
+        try:
+            # Step 1: Analyze to get function list
+            analyze_result = self.analyze(source, {"max_functions": max_functions})
+            arch = analyze_result.get("arch", "unknown")
+            functions = analyze_result.get("functions", [])
+            
+            if not functions:
+                return {
+                    "text": None,
+                    "metadata": {},
+                    "error": "No functions found in binary"
+                }
+            
+            # Step 2: Build text output
+            path = self._materialize_source(source)
+            text_parts = [
+                f"Binary Analysis: {os.path.basename(path)}",
+                f"Architecture: {arch}",
+                f"Total Functions: {len(functions)}",
+                "",
+                "=" * 80,
+                "FUNCTION LISTINGS",
+                "=" * 80,
+                ""
+            ]
+            
+            metadata = {
+                "architecture": arch,
+                "function_count": str(len(functions)),
+                "extractor": "ghidra",
+                "max_functions": str(max_functions)
+            }
+            
+            # Step 3: Decompile each function
+            decompiled_count = 0
+            failed_count = 0
+            
+            for func in functions:
+                try:
+                    decomp_result = self.decompile_function(
+                        source,
+                        func,
+                        {"timeout_sec": timeout_sec}
+                    )
+                    
+                    if decomp_result.get("ok"):
+                        decompiled_count += 1
+                        text_parts.extend([
+                            f"\n{'=' * 80}",
+                            f"Function: {func['name']}",
+                            f"Address: {func['addr']}",
+                            f"{'=' * 80}",
+                            "",
+                            decomp_result.get("decomp", ""),
+                            ""
+                        ])
+                    else:
+                        failed_count += 1
+                        text_parts.extend([
+                            f"\n// Function {func['name']} @ {func['addr']}: "
+                            f"Decompilation failed",
+                            ""
+                        ])
+                        
+                except Exception as e:  # noqa: BLE001
+                    failed_count += 1
+                    text_parts.extend([
+                        f"\n// Function {func['name']} @ {func['addr']}: "
+                        f"Error: {e}",
+                        ""
+                    ])
+            
+            metadata["decompiled_count"] = str(decompiled_count)
+            metadata["failed_count"] = str(failed_count)
+            
+            # Step 4: Return result
+            text = "\n".join(text_parts)
+            
+            return {
+                "text": text,
+                "metadata": metadata,
+                "error": None
+            }
+            
+        except Exception as e:  # noqa: BLE001
+            return {
+                "text": None,
+                "metadata": {},
+                "error": f"Extraction failed: {e}"
+            }
 
     @staticmethod
     def _materialize_source(source: Dict[str, Any]) -> str:
