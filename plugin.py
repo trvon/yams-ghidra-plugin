@@ -26,7 +26,7 @@ class GhidraPlugin(BasePlugin):
         return {
             "name": "yams_ghidra",
             "version": "0.0.1",
-            "interfaces": ["content_extractor_v1", "ghidra_analysis_v1"],
+            "interfaces": ["content_extractor_v1"],
             "capabilities": {
                 "content_extraction": {
                     "formats": [

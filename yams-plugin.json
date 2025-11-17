@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "transport": "external",
   "interfaces": [
-    "ghidra_analysis_v1"
+    "content_extractor_v1"
   ],
   "entry": {
     "cmd": [
