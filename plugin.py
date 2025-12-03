@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""YAMS Ghidra Plugin - Binary analysis via PyGhidra.
+
+This external plugin implements content_extractor_v1 for binary analysis.
+It uses PyGhidra to decompile and analyze executable files.
+"""
 import base64
 import os
 import tempfile
@@ -9,6 +14,8 @@ from yams_sdk.decorators import rpc
 
 
 class GhidraPlugin(BasePlugin):
+    """Ghidra-based binary analysis plugin for YAMS."""
+
     def __init__(self) -> None:
         super().__init__()
         self._project_dir: Optional[str] = None
@@ -25,7 +32,7 @@ class GhidraPlugin(BasePlugin):
     def manifest(self) -> dict:
         return {
             "name": "yams_ghidra",
-            "version": "0.0.1",
+            "version": "0.0.2",
             "interfaces": ["content_extractor_v1"],
             "capabilities": {
                 "content_extraction": {
@@ -35,20 +42,26 @@ class GhidraPlugin(BasePlugin):
                         "application/x-mach-binary",
                         "application/x-object"
                     ],
-                    "extensions": [".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a"]
+                    "extensions": [
+                        ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a"
+                    ]
                 }
             }
         }
 
-    def init(self, config: Dict[str, Any]) -> None:  # noqa: A003
-        # Lazy-import pyghidra on init to avoid hard dependency for non-users
+    def init(self, config: Dict[str, Any]) -> None:
+        """Initialize the plugin with Ghidra."""
         try:
             import pyghidra  # type: ignore
-        except Exception as e:  # noqa: BLE001
+        except ImportError as e:
             raise RuntimeError(f"pyghidra not available: {e}")
 
-        self._ghidra_install = config.get("ghidra_install", self._ghidra_install)
-        self._project_dir = config.get("project_dir") or tempfile.mkdtemp(prefix="yams-ghidra-")
+        self._ghidra_install = config.get(
+            "ghidra_install", self._ghidra_install
+        )
+        self._project_dir = config.get("project_dir") or tempfile.mkdtemp(
+            prefix="yams-ghidra-"
+        )
         self._project_name = config.get("project_name", self._project_name)
 
         if not self._started:
@@ -59,158 +72,16 @@ class GhidraPlugin(BasePlugin):
                 pyghidra.start()
             self._started = True
 
-        # Probe project creation/open (no persistent handle kept; opened per call)
-        try:
-            with pyghidra.open_project(self._project_dir, self._project_name, create=True):
-                pass
-        except Exception as e:  # noqa: BLE001
-            raise RuntimeError(f"Failed to open/create Ghidra project: {e}")
-
     def health(self) -> dict:
-        return {"status": "ok", "started": self._started, "project_dir": self._project_dir}
-
-    @rpc("extractor.supports")
-    def extractor_supports(self, mime_type: str, extension: str) -> dict:
-        """Check if this extractor supports the given MIME type or extension.
-        
-        Returns: {"supported": bool}
-        """
-        binary_mimes = {
-            "application/x-executable",
-            "application/x-sharedlib",
-            "application/x-mach-binary",
-            "application/x-object",
-            "application/octet-stream",  # Generic binary
+        return {
+            "status": "ok",
+            "started": self._started,
+            "project_dir": self._project_dir
         }
-        binary_exts = {
-            ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
-            ".bin", ".out"  # Common binary extensions
-        }
-        
-        supported = (
-            mime_type in binary_mimes or
-            extension.lower() in binary_exts
-        )
-        return {"supported": supported}
-
-    @rpc("extractor.extract")
-    def extractor_extract(
-        self,
-        source: Dict[str, Any],
-        options: Optional[Dict[str, Any]] = None
-    ) -> dict:
-        """Extract searchable text from binary via Ghidra decompilation.
-        
-        Args:
-            source: Source descriptor (type: "path" or "bytes", data/path)
-            options: Optional extraction options:
-                - max_functions: Max functions to decompile (default: 100)
-                - timeout_sec: Decompile timeout per function (default: 30)
-        
-        Returns:
-            {
-                "text": str,        # Searchable decompiled code
-                "metadata": dict,   # Extraction metadata
-                "error": str|None   # Error message if failed
-            }
-        """
-        opts = options or {}
-        max_functions = int(opts.get("max_functions", 100))
-        timeout_sec = int(opts.get("timeout_sec", 30))
-        
-        try:
-            # Step 1: Analyze to get function list
-            analyze_result = self.analyze(source, {"max_functions": max_functions})
-            arch = analyze_result.get("arch", "unknown")
-            functions = analyze_result.get("functions", [])
-            
-            if not functions:
-                return {
-                    "text": None,
-                    "metadata": {},
-                    "error": "No functions found in binary"
-                }
-            
-            # Step 2: Build text output
-            path = self._materialize_source(source)
-            text_parts = [
-                f"Binary Analysis: {os.path.basename(path)}",
-                f"Architecture: {arch}",
-                f"Total Functions: {len(functions)}",
-                "",
-                "=" * 80,
-                "FUNCTION LISTINGS",
-                "=" * 80,
-                ""
-            ]
-            
-            metadata = {
-                "architecture": arch,
-                "function_count": str(len(functions)),
-                "extractor": "ghidra",
-                "max_functions": str(max_functions)
-            }
-            
-            # Step 3: Decompile each function
-            decompiled_count = 0
-            failed_count = 0
-            
-            for func in functions:
-                try:
-                    decomp_result = self.decompile_function(
-                        source,
-                        func,
-                        {"timeout_sec": timeout_sec}
-                    )
-                    
-                    if decomp_result.get("ok"):
-                        decompiled_count += 1
-                        text_parts.extend([
-                            f"\n{'=' * 80}",
-                            f"Function: {func['name']}",
-                            f"Address: {func['addr']}",
-                            f"{'=' * 80}",
-                            "",
-                            decomp_result.get("decomp", ""),
-                            ""
-                        ])
-                    else:
-                        failed_count += 1
-                        text_parts.extend([
-                            f"\n// Function {func['name']} @ {func['addr']}: "
-                            f"Decompilation failed",
-                            ""
-                        ])
-                        
-                except Exception as e:  # noqa: BLE001
-                    failed_count += 1
-                    text_parts.extend([
-                        f"\n// Function {func['name']} @ {func['addr']}: "
-                        f"Error: {e}",
-                        ""
-                    ])
-            
-            metadata["decompiled_count"] = str(decompiled_count)
-            metadata["failed_count"] = str(failed_count)
-            
-            # Step 4: Return result
-            text = "\n".join(text_parts)
-            
-            return {
-                "text": text,
-                "metadata": metadata,
-                "error": None
-            }
-            
-        except Exception as e:  # noqa: BLE001
-            return {
-                "text": None,
-                "metadata": {},
-                "error": f"Extraction failed: {e}"
-            }
 
     @staticmethod
     def _materialize_source(source: Dict[str, Any]) -> str:
+        """Convert source descriptor to file path."""
         st = source.get("type")
         if st == "path":
             return source["path"]
@@ -225,19 +96,18 @@ class GhidraPlugin(BasePlugin):
             return p
         raise ValueError("unsupported source.type; expected 'path' or 'bytes'")
 
-    def _open_program_ctx(self, project, path):
+    def _open_program(self, path: str):
+        """Open a program using pyghidra's open_program API."""
         import pyghidra  # type: ignore
-        try:
-            # Preferred convenience (may be deprecated in future)
-            return pyghidra.open_program(path, analyze=True)  # type: ignore[attr-defined]
-        except AttributeError:
-            # Fallback: load via ProgramLoader then access via program_context
-            loader = pyghidra.program_loader().project(project).source(path)
-            with loader.load() as load_results:
-                load_results.save(pyghidra.dummy_monitor())
-            return pyghidra.program_context(project, "/" + os.path.basename(path))
+        return pyghidra.open_program(
+            path,
+            project_location=self._project_dir,
+            project_name=self._project_name,
+            analyze=True
+        )
 
     def _iter_functions(self, program, limit: int, offset: int = 0):
+        """Iterate over functions in a program."""
         listing = program.getListing()
         it = listing.getFunctions(True)
         skipped = 0
@@ -252,218 +122,384 @@ class GhidraPlugin(BasePlugin):
             if collected >= limit:
                 break
 
+    @rpc("extractor.supports")
+    def extractor_supports(self, mime_type: str, extension: str) -> dict:
+        """Check if this extractor supports the given MIME type or extension."""
+        binary_mimes = {
+            "application/x-executable",
+            "application/x-sharedlib",
+            "application/x-mach-binary",
+            "application/x-object",
+            "application/octet-stream",
+        }
+        binary_exts = {
+            ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
+            ".bin", ".out"
+        }
+        supported = mime_type in binary_mimes or extension.lower() in binary_exts
+        return {"supported": supported}
+
+    @rpc("extractor.extract")
+    def extractor_extract(
+        self,
+        source: Dict[str, Any],
+        options: Optional[Dict[str, Any]] = None
+    ) -> dict:
+        """Extract searchable text from binary via Ghidra decompilation."""
+        opts = options or {}
+        max_functions = int(opts.get("max_functions", 100))
+        timeout_sec = int(opts.get("timeout_sec", 30))
+
+        try:
+            analyze_result = self.analyze(source, {"max_functions": max_functions})
+            arch = analyze_result.get("arch", "unknown")
+            functions = analyze_result.get("functions", [])
+
+            if not functions:
+                return {
+                    "text": None,
+                    "metadata": {},
+                    "error": "No functions found in binary"
+                }
+
+            path = self._materialize_source(source)
+            text_parts = [
+                f"Binary Analysis: {os.path.basename(path)}",
+                f"Architecture: {arch}",
+                f"Total Functions: {len(functions)}",
+                "",
+                "=" * 80,
+                "FUNCTION LISTINGS",
+                "=" * 80,
+                ""
+            ]
+
+            metadata = {
+                "architecture": arch,
+                "function_count": str(len(functions)),
+                "extractor": "ghidra",
+                "max_functions": str(max_functions)
+            }
+
+            decompiled_count = 0
+            failed_count = 0
+
+            for func in functions:
+                try:
+                    decomp_result = self.decompile_function(
+                        source, func, {"timeout_sec": timeout_sec}
+                    )
+                    if decomp_result.get("ok"):
+                        decompiled_count += 1
+                        text_parts.extend([
+                            f"\n{'=' * 80}",
+                            f"Function: {func['name']}",
+                            f"Address: {func['addr']}",
+                            f"{'=' * 80}",
+                            "",
+                            decomp_result.get("decomp", ""),
+                            ""
+                        ])
+                    else:
+                        failed_count += 1
+                        text_parts.append(
+                            f"\n// Function {func['name']} @ {func['addr']}: "
+                            f"Decompilation failed\n"
+                        )
+                except Exception as e:  # noqa: BLE001
+                    failed_count += 1
+                    text_parts.append(
+                        f"\n// Function {func['name']} @ {func['addr']}: "
+                        f"Error: {e}\n"
+                    )
+
+            metadata["decompiled_count"] = str(decompiled_count)
+            metadata["failed_count"] = str(failed_count)
+
+            return {
+                "text": "\n".join(text_parts),
+                "metadata": metadata,
+                "error": None
+            }
+        except Exception as e:  # noqa: BLE001
+            return {"text": None, "metadata": {}, "error": f"Extraction failed: {e}"}
+
     @rpc("ghidra.analyze")
-    def analyze(self, source: Dict[str, Any], opts: Optional[Dict[str, Any]] = None) -> dict:
-        import pyghidra  # type: ignore
+    def analyze(
+        self,
+        source: Dict[str, Any],
+        opts: Optional[Dict[str, Any]] = None
+    ) -> dict:
+        """Analyze a binary and return function list."""
         path = self._materialize_source(source)
         max_functions = int((opts or {}).get("max_functions", 50))
-        with pyghidra.open_project(self._project_dir, self._project_name, create=True) as project:
-            with self._open_program_ctx(project, path) as ctx:
-                # ctx may be FlatProgramAPI or Program; normalize
-                try:
-                    program = ctx.getCurrentProgram()
-                except AttributeError:
-                    program = ctx
-                lang = program.getLanguage().getLanguageID().getIdAsString()
-                funcs = []
-                for f in self._iter_functions(program, limit=max_functions):
-                    funcs.append({"name": f.getName(), "addr": f.getEntryPoint().toString()})
-                return {"arch": lang, "count": len(funcs), "functions": funcs}
+
+        with self._open_program(path) as flat_api:
+            program = flat_api.getCurrentProgram()
+            lang = program.getLanguage().getLanguageID().getIdAsString()
+            funcs = []
+            for f in self._iter_functions(program, limit=max_functions):
+                funcs.append({
+                    "name": f.getName(),
+                    "addr": f.getEntryPoint().toString()
+                })
+            return {"arch": lang, "count": len(funcs), "functions": funcs}
 
     @rpc("ghidra.list_functions")
-    def list_functions(self, source: Dict[str, Any], opts: Optional[Dict[str, Any]] = None) -> dict:
-        import pyghidra  # type: ignore
+    def list_functions(
+        self,
+        source: Dict[str, Any],
+        opts: Optional[Dict[str, Any]] = None
+    ) -> dict:
+        """List functions with pagination."""
         path = self._materialize_source(source)
         limit = int((opts or {}).get("limit", 100))
         offset = int((opts or {}).get("offset", 0))
-        with pyghidra.open_project(self._project_dir, self._project_name, create=True) as project:
-            with self._open_program_ctx(project, path) as ctx:
-                try:
-                    program = ctx.getCurrentProgram()
-                except AttributeError:
-                    program = ctx
-                items = []
-                for f in self._iter_functions(program, limit=limit, offset=offset):
-                    items.append({"name": f.getName(), "addr": f.getEntryPoint().toString()})
-                # total is best-effort; iterate fully if requested
-                total = offset + len(items)
-                return {"items": items, "total": total}
+
+        with self._open_program(path) as flat_api:
+            program = flat_api.getCurrentProgram()
+            items = []
+            for f in self._iter_functions(program, limit=limit, offset=offset):
+                items.append({
+                    "name": f.getName(),
+                    "addr": f.getEntryPoint().toString()
+                })
+            return {"items": items, "total": offset + len(items)}
 
     @rpc("ghidra.get_function")
-    def get_function(self, source: Dict[str, Any], func: Dict[str, Any], include_body: bool = False) -> dict:
-        import pyghidra  # type: ignore
+    def get_function(
+        self,
+        source: Dict[str, Any],
+        func: Dict[str, Any],
+        include_body: bool = False
+    ) -> dict:
+        """Get details of a specific function."""
         path = self._materialize_source(source)
-        with pyghidra.open_project(self._project_dir, self._project_name, create=True) as project:
-            with self._open_program_ctx(project, path) as ctx:
-                try:
-                    program = ctx.getCurrentProgram()
-                except AttributeError:
-                    program = ctx
-                listing = program.getListing()
-                addr_factory = program.getAddressFactory()
-                target = None
-                if "addr" in func:
-                    a = addr_factory.getAddress(func["addr"])
-                    target = listing.getFunctionAt(a)
-                elif "name" in func:
-                    it = listing.getFunctions(True)
-                    while it.hasNext():
-                        f = it.next()
-                        if f.getName() == func["name"]:
-                            target = f
-                            break
-                if target is None:
-                    return {"ok": False, "error": "NotFound"}
-                out = {"name": target.getName(), "addr": target.getEntryPoint().toString()}
-                if include_body:
-                    # Best-effort: dump code units around entry (placeholder)
-                    out["body"] = f"Function {target.getName()} at {out['addr']}"
-                return out
+
+        with self._open_program(path) as flat_api:
+            program = flat_api.getCurrentProgram()
+            listing = program.getListing()
+            addr_factory = program.getAddressFactory()
+            target = None
+
+            if "addr" in func:
+                a = addr_factory.getAddress(func["addr"])
+                target = listing.getFunctionAt(a)
+            elif "name" in func:
+                it = listing.getFunctions(True)
+                while it.hasNext():
+                    f = it.next()
+                    if f.getName() == func["name"]:
+                        target = f
+                        break
+
+            if target is None:
+                return {"ok": False, "error": "NotFound"}
+
+            out = {
+                "name": target.getName(),
+                "addr": target.getEntryPoint().toString()
+            }
+            if include_body:
+                out["body"] = f"Function {target.getName()} at {out['addr']}"
+            return out
 
     @rpc("ghidra.decompile_function")
-    def decompile_function(self, source: Dict[str, Any], func: Dict[str, Any], opts: Optional[Dict[str, Any]] = None) -> dict:
-        import pyghidra  # type: ignore
+    def decompile_function(
+        self,
+        source: Dict[str, Any],
+        func: Dict[str, Any],
+        opts: Optional[Dict[str, Any]] = None
+    ) -> dict:
+        """Decompile a function to C code."""
         try:
             from ghidra.app.decompiler import DecompInterface  # type: ignore
-        except Exception:
+            from ghidra.util.task import ConsoleTaskMonitor  # type: ignore
+        except ImportError:
             return {"ok": False, "error": "DecompilerUnavailable"}
+
         path = self._materialize_source(source)
-        with pyghidra.open_project(self._project_dir, self._project_name, create=True) as project:
-            with self._open_program_ctx(project, path) as ctx:
-                try:
-                    program = ctx.getCurrentProgram()
-                except AttributeError:
-                    program = ctx
-                listing = program.getListing()
-                addr_factory = program.getAddressFactory()
-                target = None
-                if "addr" in func:
-                    a = addr_factory.getAddress(func["addr"])
-                    target = listing.getFunctionAt(a)
-                elif "name" in func:
-                    it = listing.getFunctions(True)
-                    while it.hasNext():
-                        f = it.next()
-                        if f.getName() == func["name"]:
-                            target = f
-                            break
-                if target is None:
-                    return {"ok": False, "error": "NotFound"}
-                di = DecompInterface()
-                if not di.openProgram(program):
-                    return {"ok": False, "error": "OpenProgramFailed"}
-                res = di.decompileFunction(target, int((opts or {}).get("timeout_sec", 30)), pyghidra.dummy_monitor())
-                if not res or not res.getDecompiledFunction():
-                    return {"ok": False, "error": "DecompileFailed"}
-                decomp = res.getDecompiledFunction().getC()
-                return {"ok": True, "decomp": decomp, "meta": {"name": target.getName(), "addr": target.getEntryPoint().toString()}}
+        timeout = int((opts or {}).get("timeout_sec", 30))
+
+        with self._open_program(path) as flat_api:
+            program = flat_api.getCurrentProgram()
+            listing = program.getListing()
+            addr_factory = program.getAddressFactory()
+            target = None
+
+            if "addr" in func:
+                a = addr_factory.getAddress(func["addr"])
+                target = listing.getFunctionAt(a)
+            elif "name" in func:
+                it = listing.getFunctions(True)
+                while it.hasNext():
+                    f = it.next()
+                    if f.getName() == func["name"]:
+                        target = f
+                        break
+
+            if target is None:
+                return {"ok": False, "error": "NotFound"}
+
+            di = DecompInterface()
+            if not di.openProgram(program):
+                return {"ok": False, "error": "OpenProgramFailed"}
+
+            monitor = ConsoleTaskMonitor()
+            res = di.decompileFunction(target, timeout, monitor)
+            if not res or not res.getDecompiledFunction():
+                return {"ok": False, "error": "DecompileFailed"}
+
+            decomp = res.getDecompiledFunction().getC()
+            return {
+                "ok": True,
+                "decomp": decomp,
+                "meta": {
+                    "name": target.getName(),
+                    "addr": target.getEntryPoint().toString()
+                }
+            }
 
     @rpc("ghidra.search")
-    def search(self, source: Dict[str, Any], query: Dict[str, Any], opts: Optional[Dict[str, Any]] = None) -> dict:
-        """Simple search across functions by name or decompiled text substring.
-        query: { text: "..." }
-        opts: { max_hits?: int }
-        """
-        import pyghidra  # type: ignore
+    def search(
+        self,
+        source: Dict[str, Any],
+        query: Dict[str, Any],
+        opts: Optional[Dict[str, Any]] = None
+    ) -> dict:
+        """Search functions by name or decompiled text."""
         text = (query or {}).get("text", "").strip()
         if not text:
             return {"hits": [], "total": 0}
+
         path = self._materialize_source(source)
         max_hits = int((opts or {}).get("max_hits", 25))
+        timeout = int((opts or {}).get("timeout_sec", 10))
         hits = []
         total = 0
+
         try:
             from ghidra.app.decompiler import DecompInterface  # type: ignore
-        except Exception:
-            DecompInterface = None
-        with pyghidra.open_project(self._project_dir, self._project_name, create=True) as project:
-            with self._open_program_ctx(project, path) as ctx:
-                try:
-                    program = ctx.getCurrentProgram()
-                except AttributeError:
-                    program = ctx
-                listing = program.getListing()
-                it = listing.getFunctions(True)
-                di = None
-                if DecompInterface is not None:
-                    di = DecompInterface()
-                    di.openProgram(program)
-                while it.hasNext():
-                    f = it.next()
-                    name = f.getName()
-                    addr = f.getEntryPoint().toString()
-                    found = text.lower() in name.lower()
-                    snippet = ""
-                    if not found and di is not None:
-                        try:
-                            res = di.decompileFunction(f, int((opts or {}).get("timeout_sec", 10)), pyghidra.dummy_monitor())
-                            if res and res.getDecompiledFunction():
-                                c = res.getDecompiledFunction().getC()
-                                if text.lower() in c.lower():
-                                    found = True
-                                    # create a small snippet around first occurrence
-                                    idx = c.lower().find(text.lower())
-                                    start = max(0, idx - 40)
-                                    end = min(len(c), idx + 40)
-                                    snippet = c[start:end]
-                        except Exception:
-                            pass
-                    if found:
-                        total += 1
-                        if len(hits) < max_hits:
-                            hits.append({"title": name, "addr": addr, "snippet": snippet})
-                return {"hits": hits, "total": total}
+            from ghidra.util.task import ConsoleTaskMonitor  # type: ignore
+            has_decompiler = True
+        except ImportError:
+            has_decompiler = False
+
+        with self._open_program(path) as flat_api:
+            program = flat_api.getCurrentProgram()
+            listing = program.getListing()
+            it = listing.getFunctions(True)
+
+            di = None
+            monitor = None
+            if has_decompiler:
+                di = DecompInterface()
+                di.openProgram(program)
+                monitor = ConsoleTaskMonitor()
+
+            while it.hasNext():
+                f = it.next()
+                name = f.getName()
+                addr = f.getEntryPoint().toString()
+                found = text.lower() in name.lower()
+                snippet = ""
+
+                if not found and di is not None:
+                    try:
+                        res = di.decompileFunction(f, timeout, monitor)
+                        if res and res.getDecompiledFunction():
+                            c = res.getDecompiledFunction().getC()
+                            if text.lower() in c.lower():
+                                found = True
+                                idx = c.lower().find(text.lower())
+                                start = max(0, idx - 40)
+                                end = min(len(c), idx + 40)
+                                snippet = c[start:end]
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                if found:
+                    total += 1
+                    if len(hits) < max_hits:
+                        hits.append({
+                            "title": name,
+                            "addr": addr,
+                            "snippet": snippet
+                        })
+
+            return {"hits": hits, "total": total}
 
     @rpc("ghidra.grep")
-    def grep(self, source: Dict[str, Any], pattern: Dict[str, Any], opts: Optional[Dict[str, Any]] = None) -> dict:
-        """Regex grep over decompiled function text.
-        pattern: { regex: "...", flags?: "i" }
-        opts: { max_hits?: int }
-        """
-        import pyghidra  # type: ignore
+    def grep(
+        self,
+        source: Dict[str, Any],
+        pattern: Dict[str, Any],
+        opts: Optional[Dict[str, Any]] = None
+    ) -> dict:
+        """Regex grep over decompiled function text."""
         import re
+
         regex = (pattern or {}).get("regex", "")
         if not regex:
             return {"matches": [], "total": 0}
+
         flags = 0
         if (pattern or {}).get("flags") == "i":
             flags |= re.IGNORECASE
         rx = re.compile(regex, flags)
+
         path = self._materialize_source(source)
         max_hits = int((opts or {}).get("max_hits", 25))
+        timeout = int((opts or {}).get("timeout_sec", 10))
         matches = []
         total = 0
+
         try:
             from ghidra.app.decompiler import DecompInterface  # type: ignore
-        except Exception:
-            return {"matches": [], "total": 0, "error": "DecompilerUnavailable"}
-        with pyghidra.open_project(self._project_dir, self._project_name, create=True) as project:
-            with self._open_program_ctx(project, path) as ctx:
+            from ghidra.util.task import ConsoleTaskMonitor  # type: ignore
+        except ImportError:
+            return {
+                "matches": [],
+                "total": 0,
+                "error": "DecompilerUnavailable"
+            }
+
+        with self._open_program(path) as flat_api:
+            program = flat_api.getCurrentProgram()
+            listing = program.getListing()
+            it = listing.getFunctions(True)
+
+            di = DecompInterface()
+            if not di.openProgram(program):
+                return {
+                    "matches": [],
+                    "total": 0,
+                    "error": "OpenProgramFailed"
+                }
+
+            monitor = ConsoleTaskMonitor()
+
+            while it.hasNext():
+                f = it.next()
                 try:
-                    program = ctx.getCurrentProgram()
-                except AttributeError:
-                    program = ctx
-                listing = program.getListing()
-                it = listing.getFunctions(True)
-                di = DecompInterface()
-                if not di.openProgram(program):
-                    return {"matches": [], "total": 0, "error": "OpenProgramFailed"}
-                while it.hasNext():
-                    f = it.next()
-                    try:
-                        res = di.decompileFunction(f, int((opts or {}).get("timeout_sec", 10)), pyghidra.dummy_monitor())
-                        if not res or not res.getDecompiledFunction():
-                            continue
-                        c = res.getDecompiledFunction().getC()
-                        for m in rx.finditer(c):
-                            total += 1
-                            if len(matches) < max_hits:
-                                start = max(0, m.start() - 40)
-                                end = min(len(c), m.end() + 40)
-                                matches.append({"path": f.getName(), "addr": f.getEntryPoint().toString(), "snippet": c[start:end]})
-                    except Exception:
+                    res = di.decompileFunction(f, timeout, monitor)
+                    if not res or not res.getDecompiledFunction():
                         continue
-                return {"matches": matches, "total": total}
+                    c = res.getDecompiledFunction().getC()
+                    for m in rx.finditer(c):
+                        total += 1
+                        if len(matches) < max_hits:
+                            start = max(0, m.start() - 40)
+                            end = min(len(c), m.end() + 40)
+                            matches.append({
+                                "path": f.getName(),
+                                "addr": f.getEntryPoint().toString(),
+                                "snippet": c[start:end]
+                            })
+                except Exception:  # noqa: BLE001
+                    continue
+
+            return {"matches": matches, "total": total}
 
 
 if __name__ == "__main__":
