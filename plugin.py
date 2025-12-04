@@ -3,14 +3,25 @@
 
 This external plugin implements content_extractor_v1 for binary analysis.
 It uses PyGhidra to decompile and analyze executable files.
+
+Supports PBI-093: Binary Analysis Entity Graph - emits KG nodes/edges for
+storage in YAMS knowledge graph.
 """
 import base64
+import hashlib
 import os
 import tempfile
 from typing import Optional, Dict, Any
 
 from yams_sdk.base import BasePlugin
 from yams_sdk.decorators import rpc
+
+
+# Default limits (configurable via config.toml: binary_analysis.*)
+DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_MAX_FUNCTIONS = 10000
+DEFAULT_MAX_CODE_SIZE_BYTES = 1048576  # 1MB per function
+DEFAULT_BATCH_SIZE = 500
 
 
 class GhidraPlugin(BasePlugin):
@@ -20,8 +31,15 @@ class GhidraPlugin(BasePlugin):
         super().__init__()
         self._project_dir: Optional[str] = None
         self._project_name: str = "YamsGhidra"
-        self._ghidra_install: Optional[str] = os.environ.get("GHIDRA_INSTALL_DIR")
+        self._ghidra_install: Optional[str] = os.environ.get(
+            "GHIDRA_INSTALL_DIR"
+        )
         self._started = False
+        # Configurable limits (from config.toml: binary_analysis.*)
+        self._timeout_seconds = DEFAULT_TIMEOUT_SECONDS
+        self._max_functions = DEFAULT_MAX_FUNCTIONS
+        self._max_code_size = DEFAULT_MAX_CODE_SIZE_BYTES
+        self._batch_size = DEFAULT_BATCH_SIZE
         # Register RPCs discovered via decorator metadata
         for name in dir(self):
             fn = getattr(self, name)
@@ -32,8 +50,8 @@ class GhidraPlugin(BasePlugin):
     def manifest(self) -> dict:
         return {
             "name": "yams_ghidra",
-            "version": "0.0.2",
-            "interfaces": ["content_extractor_v1"],
+            "version": "0.1.0",
+            "interfaces": ["content_extractor_v1", "kg_entity_provider_v1"],
             "capabilities": {
                 "content_extraction": {
                     "formats": [
@@ -44,6 +62,22 @@ class GhidraPlugin(BasePlugin):
                     ],
                     "extensions": [
                         ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a"
+                    ]
+                },
+                "kg_entities": {
+                    "node_types": [
+                        "binary",
+                        "binary.function",
+                        "binary.import",
+                        "binary.export",
+                        "binary.string",
+                        "binary.library"
+                    ],
+                    "edge_relations": [
+                        "CALLS",
+                        "CONTAINS",
+                        "IMPORTS",
+                        "EXPORTS"
                     ]
                 }
             }
@@ -63,6 +97,21 @@ class GhidraPlugin(BasePlugin):
             prefix="yams-ghidra-"
         )
         self._project_name = config.get("project_name", self._project_name)
+
+        # Load configurable limits from binary_analysis section
+        ba_cfg = config.get("binary_analysis", {})
+        self._timeout_seconds = int(
+            ba_cfg.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
+        )
+        self._max_functions = int(
+            ba_cfg.get("max_functions", DEFAULT_MAX_FUNCTIONS)
+        )
+        self._max_code_size = int(
+            ba_cfg.get("max_code_size_bytes", DEFAULT_MAX_CODE_SIZE_BYTES)
+        )
+        self._batch_size = int(
+            ba_cfg.get("batch_size", DEFAULT_BATCH_SIZE)
+        )
 
         if not self._started:
             # Start JVM and initialize Ghidra in headless mode
@@ -124,7 +173,7 @@ class GhidraPlugin(BasePlugin):
 
     @rpc("extractor.supports")
     def extractor_supports(self, mime_type: str, extension: str) -> dict:
-        """Check if this extractor supports the given MIME type or extension."""
+        """Check if extractor supports given MIME type or extension."""
         binary_mimes = {
             "application/x-executable",
             "application/x-sharedlib",
@@ -136,8 +185,9 @@ class GhidraPlugin(BasePlugin):
             ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
             ".bin", ".out"
         }
-        supported = mime_type in binary_mimes or extension.lower() in binary_exts
-        return {"supported": supported}
+        is_mime_ok = mime_type in binary_mimes
+        is_ext_ok = extension.lower() in binary_exts
+        return {"supported": is_mime_ok or is_ext_ok}
 
     @rpc("extractor.extract")
     def extractor_extract(
@@ -151,7 +201,8 @@ class GhidraPlugin(BasePlugin):
         timeout_sec = int(opts.get("timeout_sec", 30))
 
         try:
-            analyze_result = self.analyze(source, {"max_functions": max_functions})
+            opts_analyze = {"max_functions": max_functions}
+            analyze_result = self.analyze(source, opts_analyze)
             arch = analyze_result.get("arch", "unknown")
             functions = analyze_result.get("functions", [])
 
@@ -222,7 +273,11 @@ class GhidraPlugin(BasePlugin):
                 "error": None
             }
         except Exception as e:  # noqa: BLE001
-            return {"text": None, "metadata": {}, "error": f"Extraction failed: {e}"}
+            return {
+                "text": None,
+                "metadata": {},
+                "error": f"Extraction failed: {e}"
+            }
 
     @rpc("ghidra.analyze")
     def analyze(
@@ -500,6 +555,320 @@ class GhidraPlugin(BasePlugin):
                     continue
 
             return {"matches": matches, "total": total}
+
+    @rpc("ghidra.getEntities")
+    def get_entities(
+        self,
+        source: Dict[str, Any],
+        opts: Optional[Dict[str, Any]] = None
+    ) -> dict:
+        """Extract KG entities (nodes/edges/aliases) for binary analysis.
+
+        This RPC supports PBI-093: Binary Analysis Entity Graph.
+        Returns structured data for ingestion into YAMS knowledge graph.
+
+        Args:
+            source: Binary source descriptor (path or bytes)
+            opts: Options dict with:
+                - offset: Starting function index (default 0)
+                - limit: Max functions to process (default batch_size)
+                - entity_types: List of types to extract
+                  ["function", "import", "export", "string"]
+                - include_decompiled: Whether to include decompiled code
+                - include_call_graph: Whether to include CALLS edges
+
+        Returns:
+            {
+                "nodes": [...],
+                "edges": [...],
+                "aliases": [...],
+                "binary_sha": "sha256:...",
+                "next_offset": int,
+                "total_functions": int,
+                "has_more": bool
+            }
+        """
+        opts = opts or {}
+        offset = int(opts.get("offset", 0))
+        limit = min(
+            int(opts.get("limit", self._batch_size)),
+            self._max_functions
+        )
+        entity_types = set(opts.get("entity_types", [
+            "function", "import", "export", "string"
+        ]))
+        include_decompiled = bool(opts.get("include_decompiled", True))
+        include_call_graph = bool(opts.get("include_call_graph", True))
+        timeout = int(opts.get("timeout_sec", self._timeout_seconds))
+
+        path = self._materialize_source(source)
+
+        # Compute binary SHA256
+        with open(path, "rb") as f:
+            binary_sha = hashlib.sha256(f.read()).hexdigest()
+        binary_sha_short = binary_sha[:12]
+
+        nodes = []
+        edges = []
+        aliases = []
+
+        try:
+            from ghidra.app.decompiler import DecompInterface  # type: ignore
+            from ghidra.util.task import ConsoleTaskMonitor  # type: ignore
+            has_decompiler = True
+        except ImportError:
+            has_decompiler = False
+
+        with self._open_program(path) as flat_api:
+            program = flat_api.getCurrentProgram()
+            lang = program.getLanguage().getLanguageID().getIdAsString()
+            fmt = program.getExecutableFormat()
+            entry = program.getImageBase().toString()
+
+            # Binary node (always included)
+            binary_node_key = f"binary:{binary_sha}"
+            nodes.append({
+                "node_key": binary_node_key,
+                "label": os.path.basename(path),
+                "type": "binary",
+                "properties": {
+                    "architecture": lang,
+                    "format": fmt,
+                    "entry_point": entry,
+                    "size": os.path.getsize(path),
+                    "analysis_tool": "ghidra",
+                    "sha256": binary_sha
+                }
+            })
+
+            # Extract imports
+            if "import" in entity_types:
+                ext_mgr = program.getExternalManager()
+                for lib_name in ext_mgr.getExternalLibraryNames():
+                    if lib_name == "<EXTERNAL>":
+                        continue
+                    # Library node
+                    lib_key = f"lib:{lib_name}"
+                    nodes.append({
+                        "node_key": lib_key,
+                        "label": lib_name,
+                        "type": "binary.library",
+                        "properties": {}
+                    })
+                    edges.append({
+                        "src_key": binary_node_key,
+                        "dst_key": lib_key,
+                        "relation": "IMPORTS"
+                    })
+
+                    # Import symbols from this library
+                    ext_locs = ext_mgr.getExternalLocations(lib_name)
+                    while ext_locs.hasNext():
+                        ext_loc = ext_locs.next()
+                        sym_name = ext_loc.getLabel()
+                        import_key = f"import:{lib_name}:{sym_name}"
+                        nodes.append({
+                            "node_key": import_key,
+                            "label": sym_name,
+                            "type": "binary.import",
+                            "properties": {
+                                "library": lib_name
+                            }
+                        })
+                        aliases.append({
+                            "node_key": import_key,
+                            "alias": sym_name,
+                            "source": "ghidra"
+                        })
+
+            # Extract exports
+            if "export" in entity_types:
+                sym_table = program.getSymbolTable()
+                for sym in sym_table.getExternalEntryPointIterator():
+                    sym_name = sym.getName()
+                    export_key = f"export:{binary_sha_short}:{sym_name}"
+                    nodes.append({
+                        "node_key": export_key,
+                        "label": sym_name,
+                        "type": "binary.export",
+                        "properties": {
+                            "address": sym.getAddress().toString()
+                        }
+                    })
+                    edges.append({
+                        "src_key": binary_node_key,
+                        "dst_key": export_key,
+                        "relation": "EXPORTS"
+                    })
+                    aliases.append({
+                        "node_key": export_key,
+                        "alias": sym_name,
+                        "source": "ghidra"
+                    })
+
+            # Extract functions with pagination
+            if "function" in entity_types:
+                listing = program.getListing()
+                func_iter = listing.getFunctions(True)
+                total_count = 0
+
+                # Count total (for pagination info)
+                while func_iter.hasNext():
+                    func_iter.next()
+                    total_count += 1
+
+                # Reset and iterate with offset/limit
+                di = None
+                monitor = None
+                if has_decompiler and include_decompiled:
+                    di = DecompInterface()
+                    di.openProgram(program)
+                    monitor = ConsoleTaskMonitor()
+
+                func_nodes = []
+                for f in self._iter_functions(
+                    program, limit=limit, offset=offset
+                ):
+                    addr = f.getEntryPoint().toString()
+                    func_key = f"fn:{binary_sha_short}:{addr}"
+                    func_name = f.getName()
+
+                    props = {
+                        "address": addr,
+                        "signature": f.getPrototypeString(False, False),
+                        "size": f.getBody().getNumAddresses(),
+                        "calling_convention": (
+                            f.getCallingConventionName() or "unknown"
+                        ),
+                        "is_thunk": f.isThunk()
+                    }
+
+                    # Decompile if requested
+                    if di is not None:
+                        try:
+                            res = di.decompileFunction(f, timeout, monitor)
+                            if res and res.getDecompiledFunction():
+                                code = res.getDecompiledFunction().getC()
+                                # Truncate if too large
+                                if len(code) > self._max_code_size:
+                                    code = code[:self._max_code_size]
+                                    props["truncated"] = True
+                                props["decompiled"] = code
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                    nodes.append({
+                        "node_key": func_key,
+                        "label": func_name,
+                        "type": "binary.function",
+                        "properties": props
+                    })
+
+                    # CONTAINS edge
+                    edges.append({
+                        "src_key": binary_node_key,
+                        "dst_key": func_key,
+                        "relation": "CONTAINS"
+                    })
+
+                    # Aliases (original name + any synonyms)
+                    aliases.append({
+                        "node_key": func_key,
+                        "alias": func_name,
+                        "source": "ghidra"
+                    })
+
+                    # Demangle if needed
+                    demangled = self._demangle(func_name)
+                    if demangled and demangled != func_name:
+                        aliases.append({
+                            "node_key": func_key,
+                            "alias": demangled,
+                            "source": "ghidra-demangle"
+                        })
+
+                    func_nodes.append((func_key, f))
+
+                # Extract call graph edges
+                if include_call_graph:
+                    for func_key, f in func_nodes:
+                        called = f.getCalledFunctions(None)
+                        for callee in called:
+                            callee_addr = callee.getEntryPoint().toString()
+                            # Check if internal or external
+                            callee_key = f"fn:{binary_sha_short}:{callee_addr}"
+                            if callee.isExternal():
+                                ext_loc = callee.getExternalLocation()
+                                if ext_loc:
+                                    lib = ext_loc.getLibraryName()
+                                    sym = ext_loc.getLabel()
+                                    callee_key = f"import:{lib}:{sym}"
+
+                            edges.append({
+                                "src_key": func_key,
+                                "dst_key": callee_key,
+                                "relation": "CALLS"
+                            })
+
+                has_more = (offset + limit) < total_count
+                next_offset = offset + limit if has_more else total_count
+            else:
+                total_count = 0
+                has_more = False
+                next_offset = 0
+
+            # Extract strings
+            if "string" in entity_types:
+                data_iter = program.getListing().getDefinedData(True)
+                str_count = 0
+                max_strings = min(1000, self._max_functions)
+                while data_iter.hasNext() and str_count < max_strings:
+                    data = data_iter.next()
+                    dt = data.getDataType()
+                    if dt and "string" in dt.getName().lower():
+                        val = data.getValue()
+                        if val and isinstance(val, str) and len(val) > 3:
+                            addr = data.getAddress().toString()
+                            str_key = f"str:{binary_sha_short}:{addr}"
+                            nodes.append({
+                                "node_key": str_key,
+                                "label": val[:50],  # Truncate label
+                                "type": "binary.string",
+                                "properties": {
+                                    "value": val,
+                                    "address": addr,
+                                    "length": len(val)
+                                }
+                            })
+                            str_count += 1
+
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "aliases": aliases,
+            "binary_sha": f"sha256:{binary_sha}",
+            "next_offset": next_offset,
+            "total_functions": total_count,
+            "has_more": has_more
+        }
+
+    def _demangle(self, name: str) -> Optional[str]:
+        """Attempt to demangle a C++ symbol name."""
+        if not name or not name.startswith(("_Z", "?")):
+            return None
+
+        # Try Ghidra's built-in demangler first
+        try:
+            from ghidra.app.util.demangler import (  # type: ignore
+                DemanglerUtil
+            )
+            demangled = DemanglerUtil.demangle(name)
+            if demangled:
+                return demangled.getSignature(False)
+        except Exception:  # noqa: BLE001
+            pass
+
+        return None
 
 
 if __name__ == "__main__":

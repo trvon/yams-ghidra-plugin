@@ -1,0 +1,197 @@
+name: Build Plugin Binary
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PLUGIN_NAME: yams_ghidra
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x86_64
+          - os: macos-13
+            platform: macos
+            arch: x86_64
+          - os: macos-14
+            platform: macos
+            arch: arm64
+          - os: windows-2022
+            platform: windows
+            arch: x86_64
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -e .
+        shell: bash
+
+      - name: Build with PyInstaller (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          pyinstaller \
+            --onefile \
+            --name plugin \
+            --hidden-import=json \
+            --hidden-import=sys \
+            --hidden-import=os \
+            --collect-all yams_sdk \
+            plugin.py
+
+      - name: Build with PyInstaller (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller `
+            --onefile `
+            --name plugin `
+            --hidden-import=json `
+            --hidden-import=sys `
+            --hidden-import=os `
+            --collect-all yams_sdk `
+            plugin.py
+        shell: pwsh
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p release
+          cp yams-plugin.json release/
+          cp README.md release/
+          cp LICENSE release/
+        shell: bash
+
+      - name: Copy binary (Unix)
+        if: runner.os != 'Windows'
+        run: cp dist/plugin release/
+
+      - name: Copy binary (Windows)
+        if: runner.os == 'Windows'
+        run: cp dist/plugin.exe release/
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release/
+          retention-days: 30
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release archives
+        run: |
+          cd artifacts
+          for dir in */; do
+            name="${dir%/}"
+            cd "$name"
+            if [ -f "plugin.exe" ]; then
+              zip -r "../${name}.zip" .
+            else
+              tar -czvf "../${name}.tar.gz" .
+            fi
+            cd ..
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/*.zip
+            artifacts/*.tar.gz
+          generate_release_notes: true
+
+  publish-to-repo:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare plugin metadata
+        id: metadata
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Generate plugin info JSON for the repository
+          cat > plugin-info.json << EOF
+          {
+            "name": "${{ env.PLUGIN_NAME }}",
+            "version": "$VERSION",
+            "description": "Ghidra binary analysis plugin for YAMS",
+            "author": "YAMS Project",
+            "license": "Apache-2.0",
+            "interfaces": ["content_extractor_v1"],
+            "transport": "external",
+            "platforms": {
+              "linux-x86_64": {
+                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${{ env.PLUGIN_NAME }}-linux-x86_64.tar.gz",
+                "sha256": "$(sha256sum artifacts/${{ env.PLUGIN_NAME }}-linux-x86_64.tar.gz | cut -d' ' -f1)"
+              },
+              "macos-x86_64": {
+                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${{ env.PLUGIN_NAME }}-macos-x86_64.tar.gz",
+                "sha256": "$(sha256sum artifacts/${{ env.PLUGIN_NAME }}-macos-x86_64.tar.gz | cut -d' ' -f1)"
+              },
+              "macos-arm64": {
+                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${{ env.PLUGIN_NAME }}-macos-arm64.tar.gz",
+                "sha256": "$(sha256sum artifacts/${{ env.PLUGIN_NAME }}-macos-arm64.tar.gz | cut -d' ' -f1)"
+              },
+              "windows-x86_64": {
+                "url": "https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${{ env.PLUGIN_NAME }}-windows-x86_64.zip",
+                "sha256": "$(sha256sum artifacts/${{ env.PLUGIN_NAME }}-windows-x86_64.zip | cut -d' ' -f1)"
+              }
+            }
+          }
+          EOF
+          
+          cat plugin-info.json
+
+      - name: Upload to YAMS Plugin Repository
+        if: ${{ vars.YAMS_PLUGIN_REPO_TOKEN != '' }}
+        run: |
+          # This would upload to repo.yams.dev when the plugin repository is set up
+          echo "Would upload plugin-info.json to YAMS plugin repository"
+          # curl -X POST \
+          #   -H "Authorization: Bearer ${{ secrets.YAMS_PLUGIN_REPO_TOKEN }}" \
+          #   -H "Content-Type: application/json" \
+          #   -d @plugin-info.json \
+          #   https://repo.yams.dev/api/v1/plugins
