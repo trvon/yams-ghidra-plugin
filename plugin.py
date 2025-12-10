@@ -84,12 +84,13 @@ class GhidraPlugin(BasePlugin):
         }
 
     def init(self, config: Dict[str, Any]) -> None:
-        """Initialize the plugin with Ghidra."""
-        try:
-            import pyghidra  # type: ignore
-        except ImportError as e:
-            raise RuntimeError(f"pyghidra not available: {e}")
+        """Initialize the plugin with Ghidra.
 
+        Note: pyghidra is NOT imported at init time to support running as a
+        standalone plugin.exe bundle. The JVM/Ghidra initialization is deferred
+        to the first extraction call, allowing the plugin to report health and
+        respond to queries even when pyghidra isn't available.
+        """
         self._ghidra_install = config.get(
             "ghidra_install", self._ghidra_install
         )
@@ -112,21 +113,43 @@ class GhidraPlugin(BasePlugin):
         self._batch_size = int(
             ba_cfg.get("batch_size", DEFAULT_BATCH_SIZE)
         )
-
-        if not self._started:
-            # Start JVM and initialize Ghidra in headless mode
-            if self._ghidra_install:
-                pyghidra.start(install_dir=self._ghidra_install)
-            else:
-                pyghidra.start()
-            self._started = True
+        # Defer pyghidra initialization to first use (_ensure_ghidra_started)
 
     def health(self) -> dict:
         return {
-            "status": "ok",
+            "status": "ok" if self._started else "degraded",
             "started": self._started,
-            "project_dir": self._project_dir
+            "project_dir": self._project_dir,
+            "pyghidra_available": self._pyghidra_available()
         }
+
+    def _pyghidra_available(self) -> bool:
+        """Check if pyghidra can be imported."""
+        try:
+            import pyghidra  # type: ignore  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def _ensure_ghidra_started(self) -> None:
+        """Start Ghidra/JVM on first use."""
+        if self._started:
+            return
+
+        try:
+            import pyghidra  # type: ignore
+        except ImportError as e:
+            raise RuntimeError(
+                f"pyghidra not available: {e}. "
+                "Install pyghidra or set GHIDRA_INSTALL_DIR."
+            ) from e
+
+        # Start JVM and initialize Ghidra in headless mode
+        if self._ghidra_install:
+            pyghidra.start(install_dir=self._ghidra_install)
+        else:
+            pyghidra.start()
+        self._started = True
 
     @staticmethod
     def _materialize_source(source: Dict[str, Any]) -> str:
@@ -147,6 +170,7 @@ class GhidraPlugin(BasePlugin):
 
     def _open_program(self, path: str):
         """Open a program using pyghidra's open_program API."""
+        self._ensure_ghidra_started()
         import pyghidra  # type: ignore
         return pyghidra.open_program(
             path,
