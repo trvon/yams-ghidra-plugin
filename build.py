@@ -91,11 +91,10 @@ def main():
     shutil.copy(root / "LICENSE", output_dir)
 
     print(f"\n✓ Build complete! Output in: {output_dir}")
-    print("\nTo install:")
-    print(f"  yams plugin install {output_dir}")
-    print("\nOr to load directly:")
+    print("\nTo use the plugin, trust and load it:")
     print(f"  yams plugin trust add {output_dir}")
     print(f"  yams plugin load {output_dir}")
+    print("\nOr restart the daemon to auto-load trusted plugins.")
 
 
 if __name__ == "__main__":

@@ -7,9 +7,13 @@ It uses PyGhidra to decompile and analyze executable files.
 Supports PBI-093: Binary Analysis Entity Graph - emits KG nodes/edges for
 storage in YAMS knowledge graph.
 """
+import atexit
 import base64
+import glob
 import hashlib
 import os
+import shutil
+import sys
 import tempfile
 from typing import Optional, Dict, Any
 
@@ -56,12 +60,18 @@ class GhidraPlugin(BasePlugin):
                 "content_extraction": {
                     "formats": [
                         "application/x-executable",
+                        "application/x-msdownload",
                         "application/x-sharedlib",
                         "application/x-mach-binary",
-                        "application/x-object"
+                        "application/x-object",
+                        "application/octet-stream",
+                        "application/vnd.android.dex",
+                        "application/wasm"
                     ],
                     "extensions": [
-                        ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a"
+                        ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
+                        ".sys", ".drv", ".ocx", ".cpl", ".scr",
+                        ".bin", ".out", ".app", ".dex", ".wasm"
                     ]
                 },
                 "kg_entities": {
@@ -94,10 +104,22 @@ class GhidraPlugin(BasePlugin):
         self._ghidra_install = config.get(
             "ghidra_install", self._ghidra_install
         )
+
+        # Clean up stale project directories before creating a new one
+        cleaned = self._cleanup_stale_projects()
+        if cleaned > 0:
+            print(f"[ghidra] cleaned up {cleaned} stale project dir(s)",
+                  file=sys.stderr, flush=True)
+
         self._project_dir = config.get("project_dir") or tempfile.mkdtemp(
             prefix="yams-ghidra-"
         )
         self._project_name = config.get("project_name", self._project_name)
+
+        # Register shutdown handler
+        atexit.register(self.shutdown)
+        print(f"[ghidra] initialized, project_dir={self._project_dir}",
+              file=sys.stderr, flush=True)
 
         # Load configurable limits from binary_analysis section
         ba_cfg = config.get("binary_analysis", {})
@@ -130,6 +152,63 @@ class GhidraPlugin(BasePlugin):
             return True
         except ImportError:
             return False
+
+    def _cleanup_stale_projects(self) -> int:
+        """Clean up stale Ghidra temp directories and lock files.
+
+        Returns the number of directories cleaned up.
+        """
+        cleaned = 0
+        temp_dir = tempfile.gettempdir()
+        pattern = os.path.join(temp_dir, "yams-ghidra-*")
+
+        for path in glob.glob(pattern):
+            if not os.path.isdir(path):
+                continue
+
+            # Skip our current project directory
+            if self._project_dir and os.path.samefile(path, self._project_dir):
+                continue
+
+            # Try to remove lock files first
+            lock_pattern = os.path.join(path, "**", "*.lock*")
+            for lock_file in glob.glob(lock_pattern, recursive=True):
+                try:
+                    os.remove(lock_file)
+                    print(f"[ghidra] removed stale lock: {lock_file}",
+                          file=sys.stderr, flush=True)
+                except (OSError, PermissionError):
+                    pass  # Lock held by another process
+
+            # Try to remove the directory
+            try:
+                shutil.rmtree(path)
+                cleaned += 1
+                print(f"[ghidra] cleaned up stale project dir: {path}",
+                      file=sys.stderr, flush=True)
+            except (OSError, PermissionError) as e:
+                print(f"[ghidra] could not remove {path}: {e}",
+                      file=sys.stderr, flush=True)
+
+        return cleaned
+
+    def shutdown(self) -> None:
+        """Clean up resources on shutdown."""
+        print("[ghidra] shutdown called, cleaning up...",
+              file=sys.stderr, flush=True)
+
+        # Clean up our project directory
+        if self._project_dir and os.path.exists(self._project_dir):
+            try:
+                shutil.rmtree(self._project_dir)
+                print(f"[ghidra] removed project dir: {self._project_dir}",
+                      file=sys.stderr, flush=True)
+            except (OSError, PermissionError) as e:
+                print(f"[ghidra] could not remove project dir: {e}",
+                      file=sys.stderr, flush=True)
+
+        self._project_dir = None
+        self._started = False
 
     def _ensure_ghidra_started(self) -> None:
         """Start Ghidra/JVM on first use."""
@@ -168,13 +247,19 @@ class GhidraPlugin(BasePlugin):
             return p
         raise ValueError("unsupported source.type; expected 'path' or 'bytes'")
 
-    def _open_program(self, path: str):
-        """Open a program using pyghidra's open_program API."""
+    def _open_program(self, path: str, project_dir: Optional[str] = None):
+        """Open a program using pyghidra's open_program API.
+
+        Args:
+            path: Path to the binary file
+            project_dir: Optional project directory. If None, uses self._project_dir
+        """
         self._ensure_ghidra_started()
         import pyghidra  # type: ignore
+        loc = project_dir if project_dir else self._project_dir
         return pyghidra.open_program(
             path,
-            project_location=self._project_dir,
+            project_location=loc,
             project_name=self._project_name,
             analyze=True
         )
@@ -200,14 +285,18 @@ class GhidraPlugin(BasePlugin):
         """Check if extractor supports given MIME type or extension."""
         binary_mimes = {
             "application/x-executable",
+            "application/x-msdownload",
             "application/x-sharedlib",
             "application/x-mach-binary",
             "application/x-object",
             "application/octet-stream",
+            "application/vnd.android.dex",
+            "application/wasm",
         }
         binary_exts = {
             ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
-            ".bin", ".out"
+            ".sys", ".drv", ".ocx", ".cpl", ".scr",
+            ".bin", ".out", ".app", ".dex", ".wasm"
         }
         is_mime_ok = mime_type in binary_mimes
         is_ext_ok = extension.lower() in binary_exts
@@ -219,89 +308,192 @@ class GhidraPlugin(BasePlugin):
         source: Dict[str, Any],
         options: Optional[Dict[str, Any]] = None
     ) -> dict:
-        """Extract searchable text from binary via Ghidra decompilation."""
+        """Extract searchable text from binary via Ghidra decompilation.
+
+        OPTIMIZED: Opens the program ONCE and decompiles all functions in a
+        single session, rather than re-opening for each function.
+
+        Uses a per-call temp directory to avoid lock conflicts when multiple
+        extractions run concurrently.
+        """
         opts = options or {}
         max_functions = int(opts.get("max_functions", 100))
         timeout_sec = int(opts.get("timeout_sec", 30))
 
-        try:
-            opts_analyze = {"max_functions": max_functions}
-            analyze_result = self.analyze(source, opts_analyze)
-            arch = analyze_result.get("arch", "unknown")
-            functions = analyze_result.get("functions", [])
+        # Create a unique project directory for this extraction to avoid lock conflicts
+        call_project_dir = tempfile.mkdtemp(prefix="yams-ghidra-call-")
+        print(f"[ghidra] using per-call project dir: {call_project_dir}",
+              file=sys.stderr, flush=True)
 
-            if not functions:
-                return {
-                    "text": None,
-                    "metadata": {},
-                    "error": "No functions found in binary"
-                }
+        try:
+            # Log to stderr for debugging (visible in daemon logs)
+            print(f"[ghidra] extractor.extract: max_functions={max_functions}, timeout={timeout_sec}s",
+                  file=sys.stderr, flush=True)
 
             path = self._materialize_source(source)
-            text_parts = [
-                f"Binary Analysis: {os.path.basename(path)}",
-                f"Architecture: {arch}",
-                f"Total Functions: {len(functions)}",
-                "",
-                "=" * 80,
-                "FUNCTION LISTINGS",
-                "=" * 80,
-                ""
-            ]
+            print(f"[ghidra] materialized source: {path} ({os.path.getsize(path)} bytes)",
+                  file=sys.stderr, flush=True)
 
-            metadata = {
-                "architecture": arch,
-                "function_count": str(len(functions)),
-                "extractor": "ghidra",
-                "max_functions": str(max_functions)
-            }
+            # Open program ONCE and do all work in this context
+            # NOTE: Must open program FIRST to initialize pyghidra/JVM before importing Ghidra classes
+            print("[ghidra] opening program (this may take a while for auto-analysis)...",
+                  file=sys.stderr, flush=True)
 
-            decompiled_count = 0
-            failed_count = 0
+            with self._open_program(path, project_dir=call_project_dir) as flat_api:
+                program = flat_api.getCurrentProgram()
+                lang = program.getLanguage().getLanguageID().getIdAsString()
+                print(f"[ghidra] program opened, arch={lang}", file=sys.stderr, flush=True)
 
-            for func in functions:
+                # Import decompiler classes AFTER JVM is started
                 try:
-                    decomp_result = self.decompile_function(
-                        source, func, {"timeout_sec": timeout_sec}
-                    )
-                    if decomp_result.get("ok"):
-                        decompiled_count += 1
-                        text_parts.extend([
-                            f"\n{'=' * 80}",
-                            f"Function: {func['name']}",
-                            f"Address: {func['addr']}",
-                            f"{'=' * 80}",
-                            "",
-                            decomp_result.get("decomp", ""),
-                            ""
-                        ])
+                    from ghidra.app.decompiler import DecompInterface  # type: ignore
+                    from ghidra.util.task import ConsoleTaskMonitor  # type: ignore
+                    has_decompiler = True
+                    print("[ghidra] decompiler classes imported successfully", file=sys.stderr, flush=True)
+                except ImportError as e:
+                    has_decompiler = False
+                    print(f"[ghidra] WARNING: decompiler not available: {e}", file=sys.stderr, flush=True)
+
+                # Collect function references (keeping Ghidra Function objects)
+                funcs = []
+                for f in self._iter_functions(program, limit=max_functions):
+                    funcs.append({
+                        "name": f.getName(),
+                        "addr": f.getEntryPoint().toString(),
+                        "_ref": f  # Keep reference for decompilation
+                    })
+
+                print(f"[ghidra] found {len(funcs)} functions to decompile",
+                      file=sys.stderr, flush=True)
+
+                if not funcs:
+                    return {
+                        "text": None,
+                        "metadata": {},
+                        "error": "No functions found in binary"
+                    }
+
+                text_parts = [
+                    f"Binary Analysis: {os.path.basename(path)}",
+                    f"Architecture: {lang}",
+                    f"Total Functions: {len(funcs)}",
+                    "",
+                    "=" * 80,
+                    "FUNCTION LISTINGS",
+                    "=" * 80,
+                    ""
+                ]
+
+                metadata = {
+                    "architecture": lang,
+                    "function_count": str(len(funcs)),
+                    "extractor": "ghidra",
+                    "max_functions": str(max_functions)
+                }
+
+                decompiled_count = 0
+                failed_count = 0
+
+                # Set up decompiler ONCE for all functions
+                di = None
+                monitor = None
+                if has_decompiler:
+                    di = DecompInterface()
+                    if di.openProgram(program):
+                        monitor = ConsoleTaskMonitor()
+                        print("[ghidra] decompiler interface ready", file=sys.stderr, flush=True)
                     else:
+                        di = None
+                        print("[ghidra] ERROR: failed to open decompiler interface",
+                              file=sys.stderr, flush=True)
+
+                # Decompile each function using the same program context
+                for i, func_info in enumerate(funcs):
+                    func_name = func_info["name"]
+                    func_addr = func_info["addr"]
+                    f = func_info["_ref"]
+
+                    if i % 10 == 0:
+                        print(f"[ghidra] decompiling {i+1}/{len(funcs)}: {func_name}",
+                              file=sys.stderr, flush=True)
+
+                    try:
+                        if di is not None:
+                            res = di.decompileFunction(f, timeout_sec, monitor)
+                            if res and res.getDecompiledFunction():
+                                decompiled_count += 1
+                                decomp = res.getDecompiledFunction().getC()
+                                text_parts.extend([
+                                    f"\n{'=' * 80}",
+                                    f"Function: {func_name}",
+                                    f"Address: {func_addr}",
+                                    f"{'=' * 80}",
+                                    "",
+                                    decomp,
+                                    ""
+                                ])
+                            else:
+                                failed_count += 1
+                                text_parts.append(
+                                    f"\n// Function {func_name} @ {func_addr}: "
+                                    f"Decompilation returned no result\n"
+                                )
+                        else:
+                            failed_count += 1
+                            text_parts.append(
+                                f"\n// Function {func_name} @ {func_addr}: "
+                                f"No decompiler available\n"
+                            )
+                    except Exception as e:  # noqa: BLE001
                         failed_count += 1
                         text_parts.append(
-                            f"\n// Function {func['name']} @ {func['addr']}: "
-                            f"Decompilation failed\n"
+                            f"\n// Function {func_name} @ {func_addr}: "
+                            f"Error: {e}\n"
                         )
-                except Exception as e:  # noqa: BLE001
-                    failed_count += 1
-                    text_parts.append(
-                        f"\n// Function {func['name']} @ {func['addr']}: "
-                        f"Error: {e}\n"
-                    )
 
-            metadata["decompiled_count"] = str(decompiled_count)
-            metadata["failed_count"] = str(failed_count)
+                # Dispose decompiler to prevent resource leaks
+                if di is not None:
+                    try:
+                        di.dispose()
+                        print("[ghidra] decompiler disposed", file=sys.stderr, flush=True)
+                    except Exception:  # noqa: BLE001
+                        pass  # Ignore dispose errors
 
-            return {
-                "text": "\n".join(text_parts),
-                "metadata": metadata,
-                "error": None
-            }
+                print(f"[ghidra] decompilation complete: {decompiled_count} ok, {failed_count} failed",
+                      file=sys.stderr, flush=True)
+
+                metadata["decompiled_count"] = str(decompiled_count)
+                metadata["failed_count"] = str(failed_count)
+
+                result_text = "\n".join(text_parts)
+                print(f"[ghidra] returning {len(result_text)} chars of text",
+                      file=sys.stderr, flush=True)
+
+                return {
+                    "text": result_text,
+                    "metadata": metadata,
+                    "error": None
+                }
+
         except Exception as e:  # noqa: BLE001
+            import traceback
+            print(f"[ghidra] extraction failed: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
             return {
                 "text": None,
                 "metadata": {},
                 "error": f"Extraction failed: {e}"
             }
+        finally:
+            # Clean up the per-call temp directory
+            if call_project_dir and os.path.exists(call_project_dir):
+                try:
+                    shutil.rmtree(call_project_dir)
+                    print(f"[ghidra] cleaned up call project dir: {call_project_dir}",
+                          file=sys.stderr, flush=True)
+                except (OSError, PermissionError) as e:
+                    print(f"[ghidra] could not remove call project dir: {e}",
+                          file=sys.stderr, flush=True)
 
     @rpc("ghidra.analyze")
     def analyze(
@@ -424,20 +616,27 @@ class GhidraPlugin(BasePlugin):
             if not di.openProgram(program):
                 return {"ok": False, "error": "OpenProgramFailed"}
 
-            monitor = ConsoleTaskMonitor()
-            res = di.decompileFunction(target, timeout, monitor)
-            if not res or not res.getDecompiledFunction():
-                return {"ok": False, "error": "DecompileFailed"}
+            try:
+                monitor = ConsoleTaskMonitor()
+                res = di.decompileFunction(target, timeout, monitor)
+                if not res or not res.getDecompiledFunction():
+                    return {"ok": False, "error": "DecompileFailed"}
 
-            decomp = res.getDecompiledFunction().getC()
-            return {
-                "ok": True,
-                "decomp": decomp,
-                "meta": {
-                    "name": target.getName(),
-                    "addr": target.getEntryPoint().toString()
+                decomp = res.getDecompiledFunction().getC()
+                return {
+                    "ok": True,
+                    "decomp": decomp,
+                    "meta": {
+                        "name": target.getName(),
+                        "addr": target.getEntryPoint().toString()
+                    }
                 }
-            }
+            finally:
+                # Dispose decompiler to prevent resource leaks
+                try:
+                    di.dispose()
+                except Exception:  # noqa: BLE001
+                    pass
 
     @rpc("ghidra.search")
     def search(
@@ -505,6 +704,13 @@ class GhidraPlugin(BasePlugin):
                             "addr": addr,
                             "snippet": snippet
                         })
+
+            # Dispose decompiler to prevent resource leaks
+            if di is not None:
+                try:
+                    di.dispose()
+                except Exception:  # noqa: BLE001
+                    pass
 
             return {"hits": hits, "total": total}
 
@@ -577,6 +783,12 @@ class GhidraPlugin(BasePlugin):
                             })
                 except Exception:  # noqa: BLE001
                     continue
+
+            # Dispose decompiler to prevent resource leaks
+            try:
+                di.dispose()
+            except Exception:  # noqa: BLE001
+                pass
 
             return {"matches": matches, "total": total}
 
@@ -833,6 +1045,13 @@ class GhidraPlugin(BasePlugin):
                                 "dst_key": callee_key,
                                 "relation": "CALLS"
                             })
+
+                # Dispose decompiler to prevent resource leaks
+                if di is not None:
+                    try:
+                        di.dispose()
+                    except Exception:  # noqa: BLE001
+                        pass
 
                 has_more = (offset + limit) < total_count
                 next_offset = offset + limit if has_more else total_count
