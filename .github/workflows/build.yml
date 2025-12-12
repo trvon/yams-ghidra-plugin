@@ -12,7 +12,73 @@ env:
   PLUGIN_NAME: yams_ghidra
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Lint
+        run: uv run ruff check plugin.py
+
+      - name: Test handshake
+        run: |
+          echo '{"id":1,"method":"handshake.manifest"}' | uv run python plugin.py | \
+            uv run python -c "import sys,json; d=json.load(sys.stdin); assert d.get('result',{}).get('name')=='yams_ghidra'"
+
+      - name: Test health
+        run: |
+          echo '{"id":1,"method":"plugin.health"}' | uv run python plugin.py | \
+            uv run python -c "import sys,json; d=json.load(sys.stdin); assert d.get('result',{}).get('status') in ['ok','degraded']"
+
+  check-release:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+      hash: ${{ steps.check.outputs.hash }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute content hash
+        id: check
+        run: |
+          # Hash core source files (plugin code + manifest)
+          HASH=$(cat plugin.py yams-plugin.json pyproject.toml | sha256sum | cut -c1-8)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+
+          # Get version from yams-plugin.json
+          VERSION=$(grep -oP '"version":\s*"\K[^"]+' yams-plugin.json)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Check if tag exists for this version+hash
+          TAG="v${VERSION}-${HASH}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping release"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "Tag $TAG does not exist, will release"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          fi
+
   build:
+    needs: [test, check-release]
+    if: |
+      always() &&
+      needs.test.result == 'success' &&
+      (startsWith(github.ref, 'refs/tags/') || needs.check-release.outputs.should_release == 'true')
     strategy:
       fail-fast: false
       matrix:
@@ -68,8 +134,11 @@ jobs:
           retention-days: 30
 
   release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, check-release]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (startsWith(github.ref, 'refs/tags/') || needs.check-release.outputs.should_release == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -96,9 +165,31 @@ jobs:
             cd ..
           done
 
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            TAG="v${{ needs.check-release.outputs.version }}-${{ needs.check-release.outputs.hash }}"
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+            echo "name=$TAG (auto)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create tag for auto-release
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.tag.outputs.tag }}"
+          git push origin "${{ steps.tag.outputs.tag }}"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.name }}
           files: |
             artifacts/*.zip
             artifacts/*.tar.gz

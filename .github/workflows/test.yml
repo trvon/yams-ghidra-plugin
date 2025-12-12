@@ -29,9 +29,9 @@ jobs:
       - name: Test handshake
         run: |
           echo '{"id":1,"method":"handshake.manifest"}' | uv run python plugin.py | \
-            python -c "import sys,json; d=json.load(sys.stdin); assert d.get('result',{}).get('name')=='yams_ghidra'"
+            uv run python -c "import sys,json; d=json.load(sys.stdin); assert d.get('result',{}).get('name')=='yams_ghidra'"
 
       - name: Test health (no Ghidra)
         run: |
           echo '{"id":1,"method":"plugin.health"}' | uv run python plugin.py | \
-            python -c "import sys,json; d=json.load(sys.stdin); assert d.get('result',{}).get('status') in ['ok','degraded']"
+            uv run python -c "import sys,json; d=json.load(sys.stdin); assert d.get('result',{}).get('status') in ['ok','degraded']"
