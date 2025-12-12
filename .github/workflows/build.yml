@@ -20,9 +20,6 @@ jobs:
           - os: ubuntu-22.04
             platform: linux
             arch: x86_64
-          - os: macos-13
-            platform: macos
-            arch: x86_64
           - os: macos-14
             platform: macos
             arch: arm64
@@ -47,13 +44,8 @@ jobs:
           pip install -e .
 
       - name: Build with PyInstaller
-        run: |
-          pyinstaller --onefile --name plugin \
-            --hidden-import=json \
-            --hidden-import=sys \
-            --hidden-import=os \
-            --collect-all yams_sdk \
-            plugin.py
+        shell: bash
+        run: pyinstaller --onefile --name plugin --hidden-import=json --hidden-import=sys --hidden-import=os --collect-all yams_sdk plugin.py
 
       - name: Prepare artifact
         shell: bash
