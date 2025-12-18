@@ -920,7 +920,12 @@ class GhidraPlugin(BasePlugin):
             # Extract exports
             if "export" in entity_types:
                 sym_table = program.getSymbolTable()
-                for sym in sym_table.getExternalEntryPointIterator():
+                # getExternalEntryPointIterator returns addresses, not symbols
+                for addr in sym_table.getExternalEntryPointIterator():
+                    # Get symbol at this address
+                    sym = sym_table.getPrimarySymbol(addr)
+                    if sym is None:
+                        continue
                     sym_name = sym.getName()
                     export_key = f"export:{binary_sha_short}:{sym_name}"
                     nodes.append({
@@ -928,7 +933,7 @@ class GhidraPlugin(BasePlugin):
                         "label": sym_name,
                         "type": "binary.export",
                         "properties": {
-                            "address": sym.getAddress().toString()
+                            "address": addr.toString()
                         }
                     })
                     edges.append({
