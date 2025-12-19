@@ -4,8 +4,20 @@
   "description": "Ghidra binary analysis plugin for YAMS",
   "transport": "external",
   "interfaces": [
-    "content_extractor_v1"
+    "content_extractor_v1",
+    "kg_entity_provider_v1"
   ],
+  "capabilities": {
+    "content_extraction": {
+      "formats": ["application/x-executable", "application/x-dosexec"],
+      "extensions": [".exe", ".dll", ".so", ".dylib", ".bin", ".elf"]
+    },
+    "kg_entities": {
+      "extensions": [".exe", ".dll", ".so", ".dylib", ".bin", ".elf"],
+      "rpc_method": "ghidra.getEntities",
+      "entity_types": ["binary", "binary.function", "binary.import", "binary.export", "binary.string", "binary.library"]
+    }
+  },
   "entry": {
     "binary": {
       "windows": "plugin.exe",

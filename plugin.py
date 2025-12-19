@@ -138,11 +138,17 @@ class GhidraPlugin(BasePlugin):
         # Defer pyghidra initialization to first use (_ensure_ghidra_started)
 
     def health(self) -> dict:
+        manifest = self.manifest()
         return {
             "status": "ok" if self._started else "degraded",
             "started": self._started,
             "project_dir": self._project_dir,
-            "pyghidra_available": self._pyghidra_available()
+            "pyghidra_available": self._pyghidra_available(),
+            "ghidra_install": self._ghidra_install,
+            "interfaces": manifest.get("interfaces", []),
+            "capabilities": list(manifest.get("capabilities", {}).keys()),
+            "supported_extensions": manifest.get("capabilities", {}).get("content_extraction", {}).get("extensions", []),
+            "kg_entity_types": manifest.get("capabilities", {}).get("kg_entities", {}).get("node_types", [])
         }
 
     def _pyghidra_available(self) -> bool:
