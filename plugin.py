@@ -75,6 +75,12 @@ class GhidraPlugin(BasePlugin):
                     ]
                 },
                 "kg_entities": {
+                    "extensions": [
+                        ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
+                        ".sys", ".drv", ".ocx", ".cpl", ".scr",
+                        ".bin", ".out", ".app", ".dex", ".wasm"
+                    ],
+                    "rpc_method": "ghidra.getEntities",
                     "node_types": [
                         "binary",
                         "binary.function",
