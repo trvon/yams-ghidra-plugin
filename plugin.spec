@@ -9,7 +9,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['W:\\tools\\yams\\plugins\\yams-ghidra-plugin\\plugin.py'],
+    ['/Volumes/picaso/work/tools/yams/plugins/yams-ghidra-plugin/plugin.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,
