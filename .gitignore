@@ -2,3 +2,5 @@ build
 dist
 yams_ghidra_plugin.egg-info
 .venv
+__pycache__/
+*.pyc

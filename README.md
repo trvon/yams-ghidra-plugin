@@ -3,7 +3,11 @@
 [![Build](https://github.com/trvon/yams-ghidra-plugin/actions/workflows/build.yml/badge.svg)](https://github.com/trvon/yams-ghidra-plugin/actions/workflows/build.yml)
 [![Test](https://github.com/trvon/yams-ghidra-plugin/actions/workflows/test.yml/badge.svg)](https://github.com/trvon/yams-ghidra-plugin/actions/workflows/test.yml)
 
-Binary analysis plugin for YAMS using PyGhidra. Implements `content_extractor_v1` via JSON-RPC over stdio.
+Binary analysis plugin for YAMS using PyGhidra.
+
+Implements:
+- `content_extractor_v1` (binary text extraction / decompilation)
+- `kg_entity_provider_v1` (binary entities + call graph edges for the knowledge graph)
 
 ## Requirements
 
@@ -14,8 +18,8 @@ Binary analysis plugin for YAMS using PyGhidra. Implements `content_extractor_v1
 ## Installation
 
 ```bash
-# Install dependencies
-pip install pyghidra yams-sdk
+# Install dependencies (source-mode; the compiled release bundle doesn't need these)
+pip install yams-sdk pyghidra
 
 # Set Ghidra path
 export GHIDRA_INSTALL_DIR="/path/to/ghidra"
@@ -34,9 +38,39 @@ echo '{"id":1,"method":"ghidra.analyze","params":{"source":{"type":"path","path"
 
 ### With YAMS
 ```bash
+# Recommended: build a bundle that contains yams-plugin.json + plugin{,.exe}
+# (Use --onedir if you want a self-contained directory bundle.)
+python build.py --onedir
+
+# Trust the built plugin directory (trust-add queues scan/load in the background)
+yams plugin trust add plugins/yams-ghidra-plugin/dist/plugin
+yams plugin list
+
+# If needed, restart the daemon to auto-load trusted plugins
+yams daemon restart
+
+# Or load explicitly by path
+yams plugin load plugins/yams-ghidra-plugin/dist/plugin
+
+# Verify
+yams plugin info yams_ghidra
+yams plugin health
+
+# Dev fallback (runs plugin.py via Python; slower / less secure)
 yams plugin trust add plugins/yams-ghidra-plugin
-yams plugin load plugins/yams-ghidra-plugin/plugin.py
+yams plugin load plugins/yams-ghidra-plugin
 ```
+
+Note: if `yams plugin load ...` prints a generic failure, verify with `yams plugin list` / `yams plugin info yams_ghidra` first; it may already be loaded.
+
+## Knowledge Graph Entities
+
+When loaded, the daemon can call the plugin's `kg_entity_provider_v1` to extract:
+- binary / function nodes
+- imports/exports/strings
+- edges like `CONTAINS`, `CALLS`, `IMPORTS`, `EXPORTS`
+
+This runs as part of post-ingest processing for supported binary extensions.
 
 ## JSON-RPC Methods
 
@@ -53,9 +87,9 @@ yams plugin load plugins/yams-ghidra-plugin/plugin.py
 
 ## Supported Formats
 
-**Extensions:** `.exe`, `.dll`, `.so`, `.dylib`, `.elf`, `.o`, `.bin`
+**Extensions:** `.exe`, `.dll`, `.so`, `.dylib`, `.elf`, `.o`, `.a`, `.sys`, `.drv`, `.ocx`, `.cpl`, `.scr`, `.bin`, `.out`, `.dex`, `.wasm`
 
-**MIME types:** `application/x-executable`, `application/x-sharedlib`, `application/x-mach-binary`
+**MIME types:** `application/x-executable`, `application/x-msdownload`, `application/x-sharedlib`, `application/x-mach-binary`, `application/x-object`, `application/octet-stream`, `application/vnd.android.dex`, `application/wasm`
 
 ## Development
 

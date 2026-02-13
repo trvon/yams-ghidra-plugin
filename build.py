@@ -42,8 +42,7 @@ def main():
         print("Cleaning build artifacts...")
         shutil.rmtree(dist_dir, ignore_errors=True)
         shutil.rmtree(build_dir, ignore_errors=True)
-        for spec in root.glob("*.spec"):
-            spec.unlink()
+        # Keep committed *.spec files (tracked in the monorepo).
 
     # Ensure dependencies are installed
     print("Installing dependencies...")
@@ -57,17 +56,29 @@ def main():
     )
 
     # Build with PyInstaller
+    # Note: route generated *.spec into build/ so we don't rewrite the committed plugin.spec.
     print("Building with PyInstaller...")
+    pyinstaller_build_dir = build_dir / "pyinstaller"
+    pyinstaller_work_dir = pyinstaller_build_dir / "work"
+    pyinstaller_build_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable,
         "-m",
         "PyInstaller",
-        "--name", "plugin",
+        "--name",
+        "plugin",
         "--hidden-import=json",
         "--hidden-import=sys",
         "--hidden-import=os",
-        "--collect-all", "yams_sdk",
+        "--collect-all",
+        "yams_sdk",
         "--noconfirm",
+        "--distpath",
+        str(dist_dir),
+        "--workpath",
+        str(pyinstaller_work_dir),
+        "--specpath",
+        str(pyinstaller_build_dir),
     ]
 
     if args.onedir:
@@ -86,15 +97,23 @@ def main():
     else:
         output_dir = dist_dir
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     shutil.copy(root / "yams-plugin.json", output_dir)
     shutil.copy(root / "README.md", output_dir)
     shutil.copy(root / "LICENSE", output_dir)
 
     print(f"\n✓ Build complete! Output in: {output_dir}")
-    print("\nTo use the plugin, trust and load it:")
+    print("\nTo use with YAMS (recommended):")
     print(f"  yams plugin trust add {output_dir}")
+    print("  # trust-add queues scan/load in the background; run this shortly:")
+    print("  yams plugin list")
+    print(
+        "\nIf it doesn't appear yet, restart the daemon to auto-load trusted plugins:"
+    )
+    print("  yams daemon restart")
+    print("\nOr load explicitly:")
     print(f"  yams plugin load {output_dir}")
-    print("\nOr restart the daemon to auto-load trusted plugins.")
 
 
 if __name__ == "__main__":

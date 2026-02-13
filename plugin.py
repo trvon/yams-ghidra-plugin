@@ -7,6 +7,7 @@ It uses PyGhidra to decompile and analyze executable files.
 Supports PBI-093: Binary Analysis Entity Graph - emits KG nodes/edges for
 storage in YAMS knowledge graph.
 """
+
 import atexit
 import base64
 import glob
@@ -35,9 +36,7 @@ class GhidraPlugin(BasePlugin):
         super().__init__()
         self._project_dir: Optional[str] = None
         self._project_name: str = "YamsGhidra"
-        self._ghidra_install: Optional[str] = os.environ.get(
-            "GHIDRA_INSTALL_DIR"
-        )
+        self._ghidra_install: Optional[str] = os.environ.get("GHIDRA_INSTALL_DIR")
         self._started = False
         # Configurable limits (from config.toml: binary_analysis.*)
         self._timeout_seconds = DEFAULT_TIMEOUT_SECONDS
@@ -54,7 +53,7 @@ class GhidraPlugin(BasePlugin):
     def manifest(self) -> dict:
         return {
             "name": "yams_ghidra",
-            "version": "0.1.0",
+            "version": "0.0.1",
             "interfaces": ["content_extractor_v1", "kg_entity_provider_v1"],
             "capabilities": {
                 "content_extraction": {
@@ -66,19 +65,45 @@ class GhidraPlugin(BasePlugin):
                         "application/x-object",
                         "application/octet-stream",
                         "application/vnd.android.dex",
-                        "application/wasm"
+                        "application/wasm",
                     ],
                     "extensions": [
-                        ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
-                        ".sys", ".drv", ".ocx", ".cpl", ".scr",
-                        ".bin", ".out", ".app", ".dex", ".wasm"
-                    ]
+                        ".exe",
+                        ".dll",
+                        ".so",
+                        ".dylib",
+                        ".elf",
+                        ".o",
+                        ".a",
+                        ".sys",
+                        ".drv",
+                        ".ocx",
+                        ".cpl",
+                        ".scr",
+                        ".bin",
+                        ".out",
+                        ".dex",
+                        ".wasm",
+                    ],
                 },
                 "kg_entities": {
                     "extensions": [
-                        ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
-                        ".sys", ".drv", ".ocx", ".cpl", ".scr",
-                        ".bin", ".out", ".app", ".dex", ".wasm"
+                        ".exe",
+                        ".dll",
+                        ".so",
+                        ".dylib",
+                        ".elf",
+                        ".o",
+                        ".a",
+                        ".sys",
+                        ".drv",
+                        ".ocx",
+                        ".cpl",
+                        ".scr",
+                        ".bin",
+                        ".out",
+                        ".dex",
+                        ".wasm",
                     ],
                     "rpc_method": "ghidra.getEntities",
                     "node_types": [
@@ -87,16 +112,11 @@ class GhidraPlugin(BasePlugin):
                         "binary.import",
                         "binary.export",
                         "binary.string",
-                        "binary.library"
+                        "binary.library",
                     ],
-                    "edge_relations": [
-                        "CALLS",
-                        "CONTAINS",
-                        "IMPORTS",
-                        "EXPORTS"
-                    ]
-                }
-            }
+                    "edge_relations": ["CALLS", "CONTAINS", "IMPORTS", "EXPORTS"],
+                },
+            },
         }
 
     def init(self, config: Dict[str, Any]) -> None:
@@ -107,15 +127,16 @@ class GhidraPlugin(BasePlugin):
         to the first extraction call, allowing the plugin to report health and
         respond to queries even when pyghidra isn't available.
         """
-        self._ghidra_install = config.get(
-            "ghidra_install", self._ghidra_install
-        )
+        self._ghidra_install = config.get("ghidra_install", self._ghidra_install)
 
         # Clean up stale project directories before creating a new one
         cleaned = self._cleanup_stale_projects()
         if cleaned > 0:
-            print(f"[ghidra] cleaned up {cleaned} stale project dir(s)",
-                  file=sys.stderr, flush=True)
+            print(
+                f"[ghidra] cleaned up {cleaned} stale project dir(s)",
+                file=sys.stderr,
+                flush=True,
+            )
 
         self._project_dir = config.get("project_dir") or tempfile.mkdtemp(
             prefix="yams-ghidra-"
@@ -124,23 +145,22 @@ class GhidraPlugin(BasePlugin):
 
         # Register shutdown handler
         atexit.register(self.shutdown)
-        print(f"[ghidra] initialized, project_dir={self._project_dir}",
-              file=sys.stderr, flush=True)
+        print(
+            f"[ghidra] initialized, project_dir={self._project_dir}",
+            file=sys.stderr,
+            flush=True,
+        )
 
         # Load configurable limits from binary_analysis section
         ba_cfg = config.get("binary_analysis", {})
         self._timeout_seconds = int(
             ba_cfg.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
         )
-        self._max_functions = int(
-            ba_cfg.get("max_functions", DEFAULT_MAX_FUNCTIONS)
-        )
+        self._max_functions = int(ba_cfg.get("max_functions", DEFAULT_MAX_FUNCTIONS))
         self._max_code_size = int(
             ba_cfg.get("max_code_size_bytes", DEFAULT_MAX_CODE_SIZE_BYTES)
         )
-        self._batch_size = int(
-            ba_cfg.get("batch_size", DEFAULT_BATCH_SIZE)
-        )
+        self._batch_size = int(ba_cfg.get("batch_size", DEFAULT_BATCH_SIZE))
         # Defer pyghidra initialization to first use (_ensure_ghidra_started)
 
     def health(self) -> dict:
@@ -153,14 +173,19 @@ class GhidraPlugin(BasePlugin):
             "ghidra_install": self._ghidra_install,
             "interfaces": manifest.get("interfaces", []),
             "capabilities": list(manifest.get("capabilities", {}).keys()),
-            "supported_extensions": manifest.get("capabilities", {}).get("content_extraction", {}).get("extensions", []),
-            "kg_entity_types": manifest.get("capabilities", {}).get("kg_entities", {}).get("node_types", [])
+            "supported_extensions": manifest.get("capabilities", {})
+            .get("content_extraction", {})
+            .get("extensions", []),
+            "kg_entity_types": manifest.get("capabilities", {})
+            .get("kg_entities", {})
+            .get("node_types", []),
         }
 
     def _pyghidra_available(self) -> bool:
         """Check if pyghidra can be imported."""
         try:
             import pyghidra  # type: ignore  # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -187,8 +212,11 @@ class GhidraPlugin(BasePlugin):
             for lock_file in glob.glob(lock_pattern, recursive=True):
                 try:
                     os.remove(lock_file)
-                    print(f"[ghidra] removed stale lock: {lock_file}",
-                          file=sys.stderr, flush=True)
+                    print(
+                        f"[ghidra] removed stale lock: {lock_file}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 except (OSError, PermissionError):
                     pass  # Lock held by another process
 
@@ -196,28 +224,39 @@ class GhidraPlugin(BasePlugin):
             try:
                 shutil.rmtree(path)
                 cleaned += 1
-                print(f"[ghidra] cleaned up stale project dir: {path}",
-                      file=sys.stderr, flush=True)
+                print(
+                    f"[ghidra] cleaned up stale project dir: {path}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             except (OSError, PermissionError) as e:
-                print(f"[ghidra] could not remove {path}: {e}",
-                      file=sys.stderr, flush=True)
+                print(
+                    f"[ghidra] could not remove {path}: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
         return cleaned
 
     def shutdown(self) -> None:
         """Clean up resources on shutdown."""
-        print("[ghidra] shutdown called, cleaning up...",
-              file=sys.stderr, flush=True)
+        print("[ghidra] shutdown called, cleaning up...", file=sys.stderr, flush=True)
 
         # Clean up our project directory
         if self._project_dir and os.path.exists(self._project_dir):
             try:
                 shutil.rmtree(self._project_dir)
-                print(f"[ghidra] removed project dir: {self._project_dir}",
-                      file=sys.stderr, flush=True)
+                print(
+                    f"[ghidra] removed project dir: {self._project_dir}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             except (OSError, PermissionError) as e:
-                print(f"[ghidra] could not remove project dir: {e}",
-                      file=sys.stderr, flush=True)
+                print(
+                    f"[ghidra] could not remove project dir: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
         self._project_dir = None
         self._started = False
@@ -268,12 +307,10 @@ class GhidraPlugin(BasePlugin):
         """
         self._ensure_ghidra_started()
         import pyghidra  # type: ignore
+
         loc = project_dir if project_dir else self._project_dir
         return pyghidra.open_program(
-            path,
-            project_location=loc,
-            project_name=self._project_name,
-            analyze=True
+            path, project_location=loc, project_name=self._project_name, analyze=True
         )
 
     def _iter_functions(self, program, limit: int, offset: int = 0):
@@ -306,9 +343,22 @@ class GhidraPlugin(BasePlugin):
             "application/wasm",
         }
         binary_exts = {
-            ".exe", ".dll", ".so", ".dylib", ".elf", ".o", ".a",
-            ".sys", ".drv", ".ocx", ".cpl", ".scr",
-            ".bin", ".out", ".app", ".dex", ".wasm"
+            ".exe",
+            ".dll",
+            ".so",
+            ".dylib",
+            ".elf",
+            ".o",
+            ".a",
+            ".sys",
+            ".drv",
+            ".ocx",
+            ".cpl",
+            ".scr",
+            ".bin",
+            ".out",
+            ".dex",
+            ".wasm",
         }
         is_mime_ok = mime_type in binary_mimes
         is_ext_ok = extension.lower() in binary_exts
@@ -316,9 +366,7 @@ class GhidraPlugin(BasePlugin):
 
     @rpc("extractor.extract")
     def extractor_extract(
-        self,
-        source: Dict[str, Any],
-        options: Optional[Dict[str, Any]] = None
+        self, source: Dict[str, Any], options: Optional[Dict[str, Any]] = None
     ) -> dict:
         """Extract searchable text from binary via Ghidra decompilation.
 
@@ -334,55 +382,91 @@ class GhidraPlugin(BasePlugin):
 
         # Create a unique project directory for this extraction to avoid lock conflicts
         call_project_dir = tempfile.mkdtemp(prefix="yams-ghidra-call-")
-        print(f"[ghidra] using per-call project dir: {call_project_dir}",
-              file=sys.stderr, flush=True)
+        print(
+            f"[ghidra] using per-call project dir: {call_project_dir}",
+            file=sys.stderr,
+            flush=True,
+        )
 
         try:
             # Log to stderr for debugging (visible in daemon logs)
-            print(f"[ghidra] extractor.extract: max_functions={max_functions}, timeout={timeout_sec}s",
-                  file=sys.stderr, flush=True)
+            print(
+                f"[ghidra] extractor.extract: max_functions={max_functions}, timeout={timeout_sec}s",
+                file=sys.stderr,
+                flush=True,
+            )
 
             path = self._materialize_source(source)
-            print(f"[ghidra] materialized source: {path} ({os.path.getsize(path)} bytes)",
-                  file=sys.stderr, flush=True)
+            print(
+                f"[ghidra] materialized source: {path} ({os.path.getsize(path)} bytes)",
+                file=sys.stderr,
+                flush=True,
+            )
 
             # Open program ONCE and do all work in this context
             # NOTE: Must open program FIRST to initialize pyghidra/JVM before importing Ghidra classes
-            print("[ghidra] opening program (this may take a while for auto-analysis)...",
-                  file=sys.stderr, flush=True)
+            print(
+                "[ghidra] opening program (this may take a while for auto-analysis)...",
+                file=sys.stderr,
+                flush=True,
+            )
 
             with self._open_program(path, project_dir=call_project_dir) as flat_api:
                 program = flat_api.getCurrentProgram()
                 lang = program.getLanguage().getLanguageID().getIdAsString()
-                print(f"[ghidra] program opened, arch={lang}", file=sys.stderr, flush=True)
+                print(
+                    f"[ghidra] program opened, arch={lang}", file=sys.stderr, flush=True
+                )
 
                 # Import decompiler classes AFTER JVM is started
+                DecompInterface = None
+                ConsoleTaskMonitor = None
                 try:
-                    from ghidra.app.decompiler import DecompInterface  # type: ignore
-                    from ghidra.util.task import ConsoleTaskMonitor  # type: ignore
+                    from ghidra.app.decompiler import (  # type: ignore
+                        DecompInterface as _DecompInterface,
+                    )
+                    from ghidra.util.task import (  # type: ignore
+                        ConsoleTaskMonitor as _ConsoleTaskMonitor,
+                    )
+
+                    DecompInterface = _DecompInterface
+                    ConsoleTaskMonitor = _ConsoleTaskMonitor
                     has_decompiler = True
-                    print("[ghidra] decompiler classes imported successfully", file=sys.stderr, flush=True)
+                    print(
+                        "[ghidra] decompiler classes imported successfully",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 except ImportError as e:
                     has_decompiler = False
-                    print(f"[ghidra] WARNING: decompiler not available: {e}", file=sys.stderr, flush=True)
+                    print(
+                        f"[ghidra] WARNING: decompiler not available: {e}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
 
                 # Collect function references (keeping Ghidra Function objects)
                 funcs = []
                 for f in self._iter_functions(program, limit=max_functions):
-                    funcs.append({
-                        "name": f.getName(),
-                        "addr": f.getEntryPoint().toString(),
-                        "_ref": f  # Keep reference for decompilation
-                    })
+                    funcs.append(
+                        {
+                            "name": f.getName(),
+                            "addr": f.getEntryPoint().toString(),
+                            "_ref": f,  # Keep reference for decompilation
+                        }
+                    )
 
-                print(f"[ghidra] found {len(funcs)} functions to decompile",
-                      file=sys.stderr, flush=True)
+                print(
+                    f"[ghidra] found {len(funcs)} functions to decompile",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
                 if not funcs:
                     return {
                         "text": None,
                         "metadata": {},
-                        "error": "No functions found in binary"
+                        "error": "No functions found in binary",
                     }
 
                 text_parts = [
@@ -393,14 +477,14 @@ class GhidraPlugin(BasePlugin):
                     "=" * 80,
                     "FUNCTION LISTINGS",
                     "=" * 80,
-                    ""
+                    "",
                 ]
 
                 metadata = {
                     "architecture": lang,
                     "function_count": str(len(funcs)),
                     "extractor": "ghidra",
-                    "max_functions": str(max_functions)
+                    "max_functions": str(max_functions),
                 }
 
                 decompiled_count = 0
@@ -409,15 +493,22 @@ class GhidraPlugin(BasePlugin):
                 # Set up decompiler ONCE for all functions
                 di = None
                 monitor = None
-                if has_decompiler:
+                if DecompInterface is not None and ConsoleTaskMonitor is not None:
                     di = DecompInterface()
                     if di.openProgram(program):
                         monitor = ConsoleTaskMonitor()
-                        print("[ghidra] decompiler interface ready", file=sys.stderr, flush=True)
+                        print(
+                            "[ghidra] decompiler interface ready",
+                            file=sys.stderr,
+                            flush=True,
+                        )
                     else:
                         di = None
-                        print("[ghidra] ERROR: failed to open decompiler interface",
-                              file=sys.stderr, flush=True)
+                        print(
+                            "[ghidra] ERROR: failed to open decompiler interface",
+                            file=sys.stderr,
+                            flush=True,
+                        )
 
                 # Decompile each function using the same program context
                 for i, func_info in enumerate(funcs):
@@ -426,8 +517,11 @@ class GhidraPlugin(BasePlugin):
                     f = func_info["_ref"]
 
                     if i % 10 == 0:
-                        print(f"[ghidra] decompiling {i+1}/{len(funcs)}: {func_name}",
-                              file=sys.stderr, flush=True)
+                        print(
+                            f"[ghidra] decompiling {i + 1}/{len(funcs)}: {func_name}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
 
                     try:
                         if di is not None:
@@ -435,15 +529,17 @@ class GhidraPlugin(BasePlugin):
                             if res and res.getDecompiledFunction():
                                 decompiled_count += 1
                                 decomp = res.getDecompiledFunction().getC()
-                                text_parts.extend([
-                                    f"\n{'=' * 80}",
-                                    f"Function: {func_name}",
-                                    f"Address: {func_addr}",
-                                    f"{'=' * 80}",
-                                    "",
-                                    decomp,
-                                    ""
-                                ])
+                                text_parts.extend(
+                                    [
+                                        f"\n{'=' * 80}",
+                                        f"Function: {func_name}",
+                                        f"Address: {func_addr}",
+                                        f"{'=' * 80}",
+                                        "",
+                                        decomp,
+                                        "",
+                                    ]
+                                )
                             else:
                                 failed_count += 1
                                 text_parts.append(
@@ -459,59 +555,63 @@ class GhidraPlugin(BasePlugin):
                     except Exception as e:  # noqa: BLE001
                         failed_count += 1
                         text_parts.append(
-                            f"\n// Function {func_name} @ {func_addr}: "
-                            f"Error: {e}\n"
+                            f"\n// Function {func_name} @ {func_addr}: Error: {e}\n"
                         )
 
                 # Dispose decompiler to prevent resource leaks
                 if di is not None:
                     try:
                         di.dispose()
-                        print("[ghidra] decompiler disposed", file=sys.stderr, flush=True)
+                        print(
+                            "[ghidra] decompiler disposed", file=sys.stderr, flush=True
+                        )
                     except Exception:  # noqa: BLE001
                         pass  # Ignore dispose errors
 
-                print(f"[ghidra] decompilation complete: {decompiled_count} ok, {failed_count} failed",
-                      file=sys.stderr, flush=True)
+                print(
+                    f"[ghidra] decompilation complete: {decompiled_count} ok, {failed_count} failed",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
                 metadata["decompiled_count"] = str(decompiled_count)
                 metadata["failed_count"] = str(failed_count)
 
                 result_text = "\n".join(text_parts)
-                print(f"[ghidra] returning {len(result_text)} chars of text",
-                      file=sys.stderr, flush=True)
+                print(
+                    f"[ghidra] returning {len(result_text)} chars of text",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
-                return {
-                    "text": result_text,
-                    "metadata": metadata,
-                    "error": None
-                }
+                return {"text": result_text, "metadata": metadata, "error": None}
 
         except Exception as e:  # noqa: BLE001
             import traceback
+
             print(f"[ghidra] extraction failed: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
-            return {
-                "text": None,
-                "metadata": {},
-                "error": f"Extraction failed: {e}"
-            }
+            return {"text": None, "metadata": {}, "error": f"Extraction failed: {e}"}
         finally:
             # Clean up the per-call temp directory
             if call_project_dir and os.path.exists(call_project_dir):
                 try:
                     shutil.rmtree(call_project_dir)
-                    print(f"[ghidra] cleaned up call project dir: {call_project_dir}",
-                          file=sys.stderr, flush=True)
+                    print(
+                        f"[ghidra] cleaned up call project dir: {call_project_dir}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 except (OSError, PermissionError) as e:
-                    print(f"[ghidra] could not remove call project dir: {e}",
-                          file=sys.stderr, flush=True)
+                    print(
+                        f"[ghidra] could not remove call project dir: {e}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
 
     @rpc("ghidra.analyze")
     def analyze(
-        self,
-        source: Dict[str, Any],
-        opts: Optional[Dict[str, Any]] = None
+        self, source: Dict[str, Any], opts: Optional[Dict[str, Any]] = None
     ) -> dict:
         """Analyze a binary and return function list."""
         path = self._materialize_source(source)
@@ -522,17 +622,14 @@ class GhidraPlugin(BasePlugin):
             lang = program.getLanguage().getLanguageID().getIdAsString()
             funcs = []
             for f in self._iter_functions(program, limit=max_functions):
-                funcs.append({
-                    "name": f.getName(),
-                    "addr": f.getEntryPoint().toString()
-                })
+                funcs.append(
+                    {"name": f.getName(), "addr": f.getEntryPoint().toString()}
+                )
             return {"arch": lang, "count": len(funcs), "functions": funcs}
 
     @rpc("ghidra.list_functions")
     def list_functions(
-        self,
-        source: Dict[str, Any],
-        opts: Optional[Dict[str, Any]] = None
+        self, source: Dict[str, Any], opts: Optional[Dict[str, Any]] = None
     ) -> dict:
         """List functions with pagination."""
         path = self._materialize_source(source)
@@ -543,18 +640,14 @@ class GhidraPlugin(BasePlugin):
             program = flat_api.getCurrentProgram()
             items = []
             for f in self._iter_functions(program, limit=limit, offset=offset):
-                items.append({
-                    "name": f.getName(),
-                    "addr": f.getEntryPoint().toString()
-                })
+                items.append(
+                    {"name": f.getName(), "addr": f.getEntryPoint().toString()}
+                )
             return {"items": items, "total": offset + len(items)}
 
     @rpc("ghidra.get_function")
     def get_function(
-        self,
-        source: Dict[str, Any],
-        func: Dict[str, Any],
-        include_body: bool = False
+        self, source: Dict[str, Any], func: Dict[str, Any], include_body: bool = False
     ) -> dict:
         """Get details of a specific function."""
         path = self._materialize_source(source)
@@ -579,10 +672,7 @@ class GhidraPlugin(BasePlugin):
             if target is None:
                 return {"ok": False, "error": "NotFound"}
 
-            out = {
-                "name": target.getName(),
-                "addr": target.getEntryPoint().toString()
-            }
+            out = {"name": target.getName(), "addr": target.getEntryPoint().toString()}
             if include_body:
                 out["body"] = f"Function {target.getName()} at {out['addr']}"
             return out
@@ -592,7 +682,7 @@ class GhidraPlugin(BasePlugin):
         self,
         source: Dict[str, Any],
         func: Dict[str, Any],
-        opts: Optional[Dict[str, Any]] = None
+        opts: Optional[Dict[str, Any]] = None,
     ) -> dict:
         """Decompile a function to C code."""
         try:
@@ -640,8 +730,8 @@ class GhidraPlugin(BasePlugin):
                     "decomp": decomp,
                     "meta": {
                         "name": target.getName(),
-                        "addr": target.getEntryPoint().toString()
-                    }
+                        "addr": target.getEntryPoint().toString(),
+                    },
                 }
             finally:
                 # Dispose decompiler to prevent resource leaks
@@ -655,7 +745,7 @@ class GhidraPlugin(BasePlugin):
         self,
         source: Dict[str, Any],
         query: Dict[str, Any],
-        opts: Optional[Dict[str, Any]] = None
+        opts: Optional[Dict[str, Any]] = None,
     ) -> dict:
         """Search functions by name or decompiled text."""
         text = (query or {}).get("text", "").strip()
@@ -668,9 +758,16 @@ class GhidraPlugin(BasePlugin):
         hits = []
         total = 0
 
+        DecompInterface = None
+        ConsoleTaskMonitor = None
         try:
-            from ghidra.app.decompiler import DecompInterface  # type: ignore
-            from ghidra.util.task import ConsoleTaskMonitor  # type: ignore
+            from ghidra.app.decompiler import DecompInterface as _DecompInterface  # type: ignore
+            from ghidra.util.task import (  # type: ignore
+                ConsoleTaskMonitor as _ConsoleTaskMonitor,
+            )
+
+            DecompInterface = _DecompInterface
+            ConsoleTaskMonitor = _ConsoleTaskMonitor
             has_decompiler = True
         except ImportError:
             has_decompiler = False
@@ -682,7 +779,7 @@ class GhidraPlugin(BasePlugin):
 
             di = None
             monitor = None
-            if has_decompiler:
+            if DecompInterface is not None and ConsoleTaskMonitor is not None:
                 di = DecompInterface()
                 di.openProgram(program)
                 monitor = ConsoleTaskMonitor()
@@ -711,11 +808,7 @@ class GhidraPlugin(BasePlugin):
                 if found:
                     total += 1
                     if len(hits) < max_hits:
-                        hits.append({
-                            "title": name,
-                            "addr": addr,
-                            "snippet": snippet
-                        })
+                        hits.append({"title": name, "addr": addr, "snippet": snippet})
 
             # Dispose decompiler to prevent resource leaks
             if di is not None:
@@ -731,7 +824,7 @@ class GhidraPlugin(BasePlugin):
         self,
         source: Dict[str, Any],
         pattern: Dict[str, Any],
-        opts: Optional[Dict[str, Any]] = None
+        opts: Optional[Dict[str, Any]] = None,
     ) -> dict:
         """Regex grep over decompiled function text."""
         import re
@@ -755,11 +848,7 @@ class GhidraPlugin(BasePlugin):
             from ghidra.app.decompiler import DecompInterface  # type: ignore
             from ghidra.util.task import ConsoleTaskMonitor  # type: ignore
         except ImportError:
-            return {
-                "matches": [],
-                "total": 0,
-                "error": "DecompilerUnavailable"
-            }
+            return {"matches": [], "total": 0, "error": "DecompilerUnavailable"}
 
         with self._open_program(path) as flat_api:
             program = flat_api.getCurrentProgram()
@@ -768,11 +857,7 @@ class GhidraPlugin(BasePlugin):
 
             di = DecompInterface()
             if not di.openProgram(program):
-                return {
-                    "matches": [],
-                    "total": 0,
-                    "error": "OpenProgramFailed"
-                }
+                return {"matches": [], "total": 0, "error": "OpenProgramFailed"}
 
             monitor = ConsoleTaskMonitor()
 
@@ -788,11 +873,13 @@ class GhidraPlugin(BasePlugin):
                         if len(matches) < max_hits:
                             start = max(0, m.start() - 40)
                             end = min(len(c), m.end() + 40)
-                            matches.append({
-                                "path": f.getName(),
-                                "addr": f.getEntryPoint().toString(),
-                                "snippet": c[start:end]
-                            })
+                            matches.append(
+                                {
+                                    "path": f.getName(),
+                                    "addr": f.getEntryPoint().toString(),
+                                    "snippet": c[start:end],
+                                }
+                            )
                 except Exception:  # noqa: BLE001
                     continue
 
@@ -806,9 +893,7 @@ class GhidraPlugin(BasePlugin):
 
     @rpc("ghidra.getEntities")
     def get_entities(
-        self,
-        source: Dict[str, Any],
-        opts: Optional[Dict[str, Any]] = None
+        self, source: Dict[str, Any], opts: Optional[Dict[str, Any]] = None
     ) -> dict:
         """Extract KG entities (nodes/edges/aliases) for binary analysis.
 
@@ -838,13 +923,10 @@ class GhidraPlugin(BasePlugin):
         """
         opts = opts or {}
         offset = int(opts.get("offset", 0))
-        limit = min(
-            int(opts.get("limit", self._batch_size)),
-            self._max_functions
+        limit = min(int(opts.get("limit", self._batch_size)), self._max_functions)
+        entity_types = set(
+            opts.get("entity_types", ["function", "import", "export", "string"])
         )
-        entity_types = set(opts.get("entity_types", [
-            "function", "import", "export", "string"
-        ]))
         include_decompiled = bool(opts.get("include_decompiled", True))
         include_call_graph = bool(opts.get("include_call_graph", True))
         timeout = int(opts.get("timeout_sec", self._timeout_seconds))
@@ -860,9 +942,16 @@ class GhidraPlugin(BasePlugin):
         edges = []
         aliases = []
 
+        DecompInterface = None
+        ConsoleTaskMonitor = None
         try:
-            from ghidra.app.decompiler import DecompInterface  # type: ignore
-            from ghidra.util.task import ConsoleTaskMonitor  # type: ignore
+            from ghidra.app.decompiler import DecompInterface as _DecompInterface  # type: ignore
+            from ghidra.util.task import (  # type: ignore
+                ConsoleTaskMonitor as _ConsoleTaskMonitor,
+            )
+
+            DecompInterface = _DecompInterface
+            ConsoleTaskMonitor = _ConsoleTaskMonitor
             has_decompiler = True
         except ImportError:
             has_decompiler = False
@@ -875,19 +964,21 @@ class GhidraPlugin(BasePlugin):
 
             # Binary node (always included)
             binary_node_key = f"binary:{binary_sha}"
-            nodes.append({
-                "node_key": binary_node_key,
-                "label": os.path.basename(path),
-                "type": "binary",
-                "properties": {
-                    "architecture": lang,
-                    "format": fmt,
-                    "entry_point": entry,
-                    "size": os.path.getsize(path),
-                    "analysis_tool": "ghidra",
-                    "sha256": binary_sha
+            nodes.append(
+                {
+                    "node_key": binary_node_key,
+                    "label": os.path.basename(path),
+                    "type": "binary",
+                    "properties": {
+                        "architecture": lang,
+                        "format": fmt,
+                        "entry_point": entry,
+                        "size": os.path.getsize(path),
+                        "analysis_tool": "ghidra",
+                        "sha256": binary_sha,
+                    },
                 }
-            })
+            )
 
             # Extract imports
             if "import" in entity_types:
@@ -897,17 +988,21 @@ class GhidraPlugin(BasePlugin):
                         continue
                     # Library node
                     lib_key = f"lib:{lib_name}"
-                    nodes.append({
-                        "node_key": lib_key,
-                        "label": lib_name,
-                        "type": "binary.library",
-                        "properties": {}
-                    })
-                    edges.append({
-                        "src_key": binary_node_key,
-                        "dst_key": lib_key,
-                        "relation": "IMPORTS"
-                    })
+                    nodes.append(
+                        {
+                            "node_key": lib_key,
+                            "label": lib_name,
+                            "type": "binary.library",
+                            "properties": {},
+                        }
+                    )
+                    edges.append(
+                        {
+                            "src_key": binary_node_key,
+                            "dst_key": lib_key,
+                            "relation": "IMPORTS",
+                        }
+                    )
 
                     # Import symbols from this library
                     ext_locs = ext_mgr.getExternalLocations(lib_name)
@@ -915,19 +1010,21 @@ class GhidraPlugin(BasePlugin):
                         ext_loc = ext_locs.next()
                         sym_name = ext_loc.getLabel()
                         import_key = f"import:{lib_name}:{sym_name}"
-                        nodes.append({
-                            "node_key": import_key,
-                            "label": sym_name,
-                            "type": "binary.import",
-                            "properties": {
-                                "library": lib_name
+                        nodes.append(
+                            {
+                                "node_key": import_key,
+                                "label": sym_name,
+                                "type": "binary.import",
+                                "properties": {"library": lib_name},
                             }
-                        })
-                        aliases.append({
-                            "node_key": import_key,
-                            "alias": sym_name,
-                            "source": "ghidra"
-                        })
+                        )
+                        aliases.append(
+                            {
+                                "node_key": import_key,
+                                "alias": sym_name,
+                                "source": "ghidra",
+                            }
+                        )
 
             # Extract exports
             if "export" in entity_types:
@@ -940,24 +1037,24 @@ class GhidraPlugin(BasePlugin):
                         continue
                     sym_name = sym.getName()
                     export_key = f"export:{binary_sha_short}:{sym_name}"
-                    nodes.append({
-                        "node_key": export_key,
-                        "label": sym_name,
-                        "type": "binary.export",
-                        "properties": {
-                            "address": addr.toString()
+                    nodes.append(
+                        {
+                            "node_key": export_key,
+                            "label": sym_name,
+                            "type": "binary.export",
+                            "properties": {"address": addr.toString()},
                         }
-                    })
-                    edges.append({
-                        "src_key": binary_node_key,
-                        "dst_key": export_key,
-                        "relation": "EXPORTS"
-                    })
-                    aliases.append({
-                        "node_key": export_key,
-                        "alias": sym_name,
-                        "source": "ghidra"
-                    })
+                    )
+                    edges.append(
+                        {
+                            "src_key": binary_node_key,
+                            "dst_key": export_key,
+                            "relation": "EXPORTS",
+                        }
+                    )
+                    aliases.append(
+                        {"node_key": export_key, "alias": sym_name, "source": "ghidra"}
+                    )
 
             # Extract functions with pagination
             if "function" in entity_types:
@@ -973,15 +1070,17 @@ class GhidraPlugin(BasePlugin):
                 # Reset and iterate with offset/limit
                 di = None
                 monitor = None
-                if has_decompiler and include_decompiled:
+                if (
+                    include_decompiled
+                    and DecompInterface is not None
+                    and ConsoleTaskMonitor is not None
+                ):
                     di = DecompInterface()
                     di.openProgram(program)
                     monitor = ConsoleTaskMonitor()
 
                 func_nodes = []
-                for f in self._iter_functions(
-                    program, limit=limit, offset=offset
-                ):
+                for f in self._iter_functions(program, limit=limit, offset=offset):
                     addr = f.getEntryPoint().toString()
                     func_key = f"fn:{binary_sha_short}:{addr}"
                     func_name = f.getName()
@@ -993,7 +1092,7 @@ class GhidraPlugin(BasePlugin):
                         "calling_convention": (
                             f.getCallingConventionName() or "unknown"
                         ),
-                        "is_thunk": f.isThunk()
+                        "is_thunk": f.isThunk(),
                     }
 
                     # Decompile if requested
@@ -1004,41 +1103,45 @@ class GhidraPlugin(BasePlugin):
                                 code = res.getDecompiledFunction().getC()
                                 # Truncate if too large
                                 if len(code) > self._max_code_size:
-                                    code = code[:self._max_code_size]
+                                    code = code[: self._max_code_size]
                                     props["truncated"] = True
                                 props["decompiled"] = code
                         except Exception:  # noqa: BLE001
                             pass
 
-                    nodes.append({
-                        "node_key": func_key,
-                        "label": func_name,
-                        "type": "binary.function",
-                        "properties": props
-                    })
+                    nodes.append(
+                        {
+                            "node_key": func_key,
+                            "label": func_name,
+                            "type": "binary.function",
+                            "properties": props,
+                        }
+                    )
 
                     # CONTAINS edge
-                    edges.append({
-                        "src_key": binary_node_key,
-                        "dst_key": func_key,
-                        "relation": "CONTAINS"
-                    })
+                    edges.append(
+                        {
+                            "src_key": binary_node_key,
+                            "dst_key": func_key,
+                            "relation": "CONTAINS",
+                        }
+                    )
 
                     # Aliases (original name + any synonyms)
-                    aliases.append({
-                        "node_key": func_key,
-                        "alias": func_name,
-                        "source": "ghidra"
-                    })
+                    aliases.append(
+                        {"node_key": func_key, "alias": func_name, "source": "ghidra"}
+                    )
 
                     # Demangle if needed
                     demangled = self._demangle(func_name)
                     if demangled and demangled != func_name:
-                        aliases.append({
-                            "node_key": func_key,
-                            "alias": demangled,
-                            "source": "ghidra-demangle"
-                        })
+                        aliases.append(
+                            {
+                                "node_key": func_key,
+                                "alias": demangled,
+                                "source": "ghidra-demangle",
+                            }
+                        )
 
                     func_nodes.append((func_key, f))
 
@@ -1057,11 +1160,13 @@ class GhidraPlugin(BasePlugin):
                                     sym = ext_loc.getLabel()
                                     callee_key = f"import:{lib}:{sym}"
 
-                            edges.append({
-                                "src_key": func_key,
-                                "dst_key": callee_key,
-                                "relation": "CALLS"
-                            })
+                            edges.append(
+                                {
+                                    "src_key": func_key,
+                                    "dst_key": callee_key,
+                                    "relation": "CALLS",
+                                }
+                            )
 
                 # Dispose decompiler to prevent resource leaks
                 if di is not None:
@@ -1090,16 +1195,18 @@ class GhidraPlugin(BasePlugin):
                         if val and isinstance(val, str) and len(val) > 3:
                             addr = data.getAddress().toString()
                             str_key = f"str:{binary_sha_short}:{addr}"
-                            nodes.append({
-                                "node_key": str_key,
-                                "label": val[:50],  # Truncate label
-                                "type": "binary.string",
-                                "properties": {
-                                    "value": val,
-                                    "address": addr,
-                                    "length": len(val)
+                            nodes.append(
+                                {
+                                    "node_key": str_key,
+                                    "label": val[:50],  # Truncate label
+                                    "type": "binary.string",
+                                    "properties": {
+                                        "value": val,
+                                        "address": addr,
+                                        "length": len(val),
+                                    },
                                 }
-                            })
+                            )
                             str_count += 1
 
         return {
@@ -1109,7 +1216,7 @@ class GhidraPlugin(BasePlugin):
             "binary_sha": f"sha256:{binary_sha}",
             "next_offset": next_offset,
             "total_functions": total_count,
-            "has_more": has_more
+            "has_more": has_more,
         }
 
     def _demangle(self, name: str) -> Optional[str]:
@@ -1120,8 +1227,9 @@ class GhidraPlugin(BasePlugin):
         # Try Ghidra's built-in demangler first
         try:
             from ghidra.app.util.demangler import (  # type: ignore
-                DemanglerUtil
+                DemanglerUtil,
             )
+
             demangled = DemanglerUtil.demangle(name)
             if demangled:
                 return demangled.getSignature(False)

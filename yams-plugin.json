@@ -9,13 +9,64 @@
   ],
   "capabilities": {
     "content_extraction": {
-      "formats": ["application/x-executable", "application/x-dosexec"],
-      "extensions": [".exe", ".dll", ".so", ".dylib", ".bin", ".elf"]
+      "formats": [
+        "application/x-executable",
+        "application/x-msdownload",
+        "application/x-sharedlib",
+        "application/x-mach-binary",
+        "application/x-object",
+        "application/octet-stream",
+        "application/vnd.android.dex",
+        "application/wasm"
+      ],
+      "extensions": [
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+        ".elf",
+        ".o",
+        ".a",
+        ".sys",
+        ".drv",
+        ".ocx",
+        ".cpl",
+        ".scr",
+        ".bin",
+        ".out",
+        ".dex",
+        ".wasm"
+      ]
     },
     "kg_entities": {
-      "extensions": [".exe", ".dll", ".so", ".dylib", ".bin", ".elf"],
+      "extensions": [
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+        ".elf",
+        ".o",
+        ".a",
+        ".sys",
+        ".drv",
+        ".ocx",
+        ".cpl",
+        ".scr",
+        ".bin",
+        ".out",
+        ".dex",
+        ".wasm"
+      ],
       "rpc_method": "ghidra.getEntities",
-      "entity_types": ["binary", "binary.function", "binary.import", "binary.export", "binary.string", "binary.library"]
+      "node_types": [
+        "binary",
+        "binary.function",
+        "binary.import",
+        "binary.export",
+        "binary.string",
+        "binary.library"
+      ],
+      "edge_relations": ["CALLS", "CONTAINS", "IMPORTS", "EXPORTS"]
     }
   },
   "entry": {
