@@ -9,59 +9,78 @@ Implements:
 - `content_extractor_v1` (binary text extraction / decompilation)
 - `kg_entity_provider_v1` (binary entities + call graph edges for the knowledge graph)
 
+Local development and CI both use the same `uv` + Python 3.11 workflow.
+
 ## Requirements
 
 - Ghidra 11.x+ ([download](https://ghidra-sre.org/))
-- Python 3.9+
+- Python 3.11 (the build and CI workflow are currently tested on 3.11)
 - Java 17+
+- [uv](https://docs.astral.sh/uv/)
 
-## Installation
+## Development Setup
 
 ```bash
-# Install dependencies (source-mode; the compiled release bundle doesn't need these)
-pip install yams-sdk pyghidra
+uv python install 3.11
+uv sync --dev
 
-# Set Ghidra path
+# Optional: install local Ghidra bindings for source-mode analysis
+uv sync --dev --extra ghidra
 export GHIDRA_INSTALL_DIR="/path/to/ghidra"
 ```
 
+Use `uv sync --dev` for the normal source-mode setup. The compiled release
+bundle does not need these Python dependencies.
+
 ## Usage
 
-### Standalone
+### Run from source
 ```bash
 # Test handshake
-echo '{"id":1,"method":"handshake.manifest"}' | python plugin.py
+echo '{"id":1,"method":"handshake.manifest"}' | uv run python plugin.py
 
-# Analyze binary
-echo '{"id":1,"method":"ghidra.analyze","params":{"source":{"type":"path","path":"/bin/ls"}}}' | python plugin.py
+# Analyze a binary (requires `--extra ghidra` and a Ghidra install)
+echo '{"id":1,"method":"ghidra.analyze","params":{"source":{"type":"path","path":"/bin/ls"}}}' | uv run python plugin.py
 ```
 
-### With YAMS
+### Build the distributable plugin
 ```bash
-# Recommended: build a bundle that contains yams-plugin.json + plugin{,.exe}
-# (Use --onedir if you want a self-contained directory bundle.)
-python build.py --onedir
+# Recommended: build a self-contained directory bundle
+uv run python build.py --onedir
 
-# Trust the built plugin directory (trust-add queues scan/load in the background)
-yams plugin trust add plugins/yams-ghidra-plugin/dist/plugin
+# Smaller one-file build
+uv run python build.py
+```
+
+The GitHub Actions `test.yml` and `build.yml` workflows use the same commands.
+
+### Load into YAMS
+For the recommended `--onedir` build:
+
+```bash
+yams plugin trust add dist/plugin
 yams plugin list
 
 # If needed, restart the daemon to auto-load trusted plugins
 yams daemon restart
 
 # Or load explicitly by path
-yams plugin load plugins/yams-ghidra-plugin/dist/plugin
+yams plugin load dist/plugin
 
 # Verify
 yams plugin info yams_ghidra
 yams plugin health
-
-# Dev fallback (runs plugin.py via Python; slower / less secure)
-yams plugin trust add plugins/yams-ghidra-plugin
-yams plugin load plugins/yams-ghidra-plugin
 ```
 
-Note: if `yams plugin load ...` prints a generic failure, verify with `yams plugin list` / `yams plugin info yams_ghidra` first; it may already be loaded.
+For the one-file build, trust or load `dist` instead of `dist/plugin`.
+
+```bash
+# Dev fallback (runs plugin.py via Python; slower / less secure)
+yams plugin trust add .
+yams plugin load .
+```
+
+Note: if `yams plugin load ...` prints a generic failure, verify with `yams plugin list` or `yams plugin info yams_ghidra` first; it may already be loaded.
 
 ## Knowledge Graph Entities
 
@@ -94,7 +113,7 @@ This runs as part of post-ingest processing for supported binary extensions.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-python build.py        # Build standalone binary
-ruff check plugin.py   # Lint
+uv sync --dev
+uv run python build.py
+uv run ruff check build.py plugin.py
 ```

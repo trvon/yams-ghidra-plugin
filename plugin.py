@@ -431,14 +431,12 @@ class GhidraPlugin(BasePlugin):
 
                     DecompInterface = _DecompInterface
                     ConsoleTaskMonitor = _ConsoleTaskMonitor
-                    has_decompiler = True
                     print(
                         "[ghidra] decompiler classes imported successfully",
                         file=sys.stderr,
                         flush=True,
                     )
                 except ImportError as e:
-                    has_decompiler = False
                     print(
                         f"[ghidra] WARNING: decompiler not available: {e}",
                         file=sys.stderr,
@@ -768,9 +766,8 @@ class GhidraPlugin(BasePlugin):
 
             DecompInterface = _DecompInterface
             ConsoleTaskMonitor = _ConsoleTaskMonitor
-            has_decompiler = True
         except ImportError:
-            has_decompiler = False
+            pass
 
         with self._open_program(path) as flat_api:
             program = flat_api.getCurrentProgram()
@@ -952,9 +949,8 @@ class GhidraPlugin(BasePlugin):
 
             DecompInterface = _DecompInterface
             ConsoleTaskMonitor = _ConsoleTaskMonitor
-            has_decompiler = True
         except ImportError:
-            has_decompiler = False
+            pass
 
         with self._open_program(path) as flat_api:
             program = flat_api.getCurrentProgram()
