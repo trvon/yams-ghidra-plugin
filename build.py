@@ -116,7 +116,7 @@ def main():
     shutil.copy(root / "README.md", output_dir)
     shutil.copy(root / "LICENSE", output_dir)
 
-    print(f"\n✓ Build complete! Output in: {output_dir}")
+    print(f"\nBuild complete! Output in: {output_dir}")
     print("\nTo use with YAMS (recommended):")
     print(f"  yams plugin trust add {output_dir}")
     print("  # trust-add queues scan/load in the background; run this shortly:")
