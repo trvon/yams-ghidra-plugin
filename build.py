@@ -26,6 +26,7 @@ def ensure_build_dependencies() -> None:
     required = {
         "PyInstaller": "pyinstaller",
         "yams_sdk": "yams-sdk",
+        "pyghidra": "pyghidra",
     }
     missing = [
         package_name
@@ -37,7 +38,7 @@ def ensure_build_dependencies() -> None:
         raise SystemExit(
             "Missing build dependencies: "
             f"{packages}. Sync the project environment first with "
-            "`uv sync --dev`, then rerun `uv run python build.py`."
+            "`uv sync --dev --extra ghidra`, then rerun `uv run python build.py`."
         )
 
 
@@ -83,8 +84,13 @@ def main():
         "--hidden-import=json",
         "--hidden-import=sys",
         "--hidden-import=os",
+        "--hidden-import=pyghidra",
         "--collect-all",
         "yams_sdk",
+        "--collect-all",
+        "pyghidra",
+        "--collect-all",
+        "jpype",
         "--noconfirm",
         "--distpath",
         str(dist_dir),

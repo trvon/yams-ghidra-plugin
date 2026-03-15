@@ -29,8 +29,18 @@ uv sync --dev --extra ghidra
 export GHIDRA_INSTALL_DIR="/path/to/ghidra"
 ```
 
-Use `uv sync --dev` for the normal source-mode setup. The compiled release
-bundle does not need these Python dependencies.
+Use `uv sync --dev` for the normal source-mode setup.
+
+For a distributable build that can actually run Ghidra extraction, build from an
+environment that includes the Ghidra extra:
+
+```bash
+uv sync --dev --extra ghidra
+uv run python build.py --onedir
+```
+
+The built plugin still requires a real Ghidra installation at runtime via
+`GHIDRA_INSTALL_DIR` or plugin init config.
 
 ## Usage
 
@@ -46,6 +56,7 @@ echo '{"id":1,"method":"ghidra.analyze","params":{"source":{"type":"path","path"
 ### Build the distributable plugin
 ```bash
 # Recommended: build a self-contained directory bundle
+# Requires: uv sync --dev --extra ghidra
 uv run python build.py --onedir
 
 # Smaller one-file build

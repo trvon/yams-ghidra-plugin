@@ -271,7 +271,9 @@ class GhidraPlugin(BasePlugin):
         except ImportError as e:
             raise RuntimeError(
                 f"pyghidra not available: {e}. "
-                "Install pyghidra or set GHIDRA_INSTALL_DIR."
+                "Build/run this plugin from an environment with the `ghidra` extra "
+                "(for example: `uv sync --dev --extra ghidra`) and set "
+                "GHIDRA_INSTALL_DIR to your Ghidra installation."
             ) from e
 
         # Start JVM and initialize Ghidra in headless mode
