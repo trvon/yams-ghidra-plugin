@@ -6,7 +6,7 @@ Creates a standalone executable using PyInstaller that can be loaded
 by the YAMS daemon without requiring a Python interpreter.
 
 Usage:
-    python build.py [--onedir]
+    uv run python build.py [--onedir]
 
 Options:
     --onedir    Create a directory with dependencies instead of single file
@@ -14,10 +14,31 @@ Options:
 """
 
 import argparse
+import importlib.util
 import subprocess
 import sys
 import shutil
 from pathlib import Path
+
+
+def ensure_build_dependencies() -> None:
+    """Fail fast with a uv-first setup hint when build deps are missing."""
+    required = {
+        "PyInstaller": "pyinstaller",
+        "yams_sdk": "yams-sdk",
+    }
+    missing = [
+        package_name
+        for module_name, package_name in required.items()
+        if importlib.util.find_spec(module_name) is None
+    ]
+    if missing:
+        packages = ", ".join(sorted(missing))
+        raise SystemExit(
+            "Missing build dependencies: "
+            f"{packages}. Sync the project environment first with "
+            "`uv sync --dev`, then rerun `uv run python build.py`."
+        )
 
 
 def main():
@@ -45,16 +66,8 @@ def main():
         for spec in root.glob("*.spec"):
             spec.unlink()
 
-    # Ensure dependencies are installed
-    print("Installing dependencies...")
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", str(root)],
-        check=True,
-    )
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "pyinstaller"],
-        check=True,
-    )
+    print("Checking build dependencies...")
+    ensure_build_dependencies()
 
     # Build with PyInstaller
     print("Building with PyInstaller...")
@@ -62,11 +75,13 @@ def main():
         sys.executable,
         "-m",
         "PyInstaller",
-        "--name", "plugin",
+        "--name",
+        "plugin",
         "--hidden-import=json",
         "--hidden-import=sys",
         "--hidden-import=os",
-        "--collect-all", "yams_sdk",
+        "--collect-all",
+        "yams_sdk",
         "--noconfirm",
     ]
 

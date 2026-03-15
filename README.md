@@ -5,37 +5,58 @@
 
 Binary analysis plugin for YAMS using PyGhidra. Implements `content_extractor_v1` via JSON-RPC over stdio.
 
+Local development and CI both use the same `uv` + Python 3.11 workflow.
+
 ## Requirements
 
 - Ghidra 11.x+ ([download](https://ghidra-sre.org/))
-- Python 3.9+
+- Python 3.11 (the build and CI workflow are currently tested on 3.11)
 - Java 17+
+- [uv](https://docs.astral.sh/uv/)
 
-## Installation
+## Development Setup
 
 ```bash
-# Install dependencies
-pip install pyghidra yams-sdk
+uv python install 3.11
+uv sync --dev
+```
 
-# Set Ghidra path
+Install the optional Ghidra bindings when you want to run local analysis from
+source:
+
+```bash
+uv sync --dev --extra ghidra
 export GHIDRA_INSTALL_DIR="/path/to/ghidra"
 ```
 
+The build script no longer installs dependencies for you. Sync the environment
+first, then run it through `uv`.
+
 ## Usage
 
-### Standalone
+### Run from source
 ```bash
 # Test handshake
-echo '{"id":1,"method":"handshake.manifest"}' | python plugin.py
+echo '{"id":1,"method":"handshake.manifest"}' | uv run python plugin.py
 
-# Analyze binary
-echo '{"id":1,"method":"ghidra.analyze","params":{"source":{"type":"path","path":"/bin/ls"}}}' | python plugin.py
+# Analyze a binary (requires `--extra ghidra` and a Ghidra install)
+echo '{"id":1,"method":"ghidra.analyze","params":{"source":{"type":"path","path":"/bin/ls"}}}' | uv run python plugin.py
 ```
 
-### With YAMS
+### Build the distributable plugin
 ```bash
-yams plugin trust add plugins/yams-ghidra-plugin
-yams plugin load plugins/yams-ghidra-plugin/plugin.py
+uv run python build.py
+# or: uv run python build.py --onedir
+```
+
+The GitHub Actions `test.yml` and `build.yml` workflows use the same commands.
+
+### Load into YAMS
+For the default one-file build, load the `dist` directory:
+
+```bash
+yams plugin trust add dist
+yams plugin load dist
 ```
 
 ## JSON-RPC Methods
@@ -60,7 +81,7 @@ yams plugin load plugins/yams-ghidra-plugin/plugin.py
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-python build.py        # Build standalone binary
-ruff check plugin.py   # Lint
+uv sync --dev
+uv run python build.py
+uv run ruff check build.py plugin.py
 ```
